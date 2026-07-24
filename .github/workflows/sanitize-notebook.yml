@@ -1,0 +1,43 @@
+name: Sanitize committed notebook
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/sanitize_notebook.py'
+      - '.github/workflows/sanitize-notebook.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sanitize:
+    if: ${{ !contains(github.event.head_commit.message, '[skip sanitize]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Sanitize notebook
+        run: python scripts/sanitize_notebook.py
+
+      - name: Commit sanitized notebook
+        shell: bash
+        run: |
+          if git diff --quiet -- edith.ipynb; then
+            echo 'Notebook already sanitized.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add edith.ipynb
+          git commit -m 'security: externalize MT5 credentials and clear notebook outputs [skip sanitize]'
+          git push
