@@ -1,0 +1,72 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# Jupyter
+.ipynb_checkpoints/
+*.nbconvert.ipynb
+
+# Runtime state and telemetry
+logs/
+*.log
+*.pid
+*.lock
+runtime/
+state/
+telemetry/
+artifacts/
+
+# Trading and broker-local data
+*.csv
+*.parquet
+*.feather
+*.sqlite
+*.sqlite3
+*.db
+mt5_data/
+terminal_data/
+backtests/output/
+reports/generated/
+
+# Build and packaging
+build/
+dist/
+*.egg-info/
+
+# IDE and operating system
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+~$*
