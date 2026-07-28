@@ -26,18 +26,21 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Sanitize notebook
+      - name: Install notebook tooling
+        run: python -m pip install --upgrade pip nbformat
+
+      - name: Normalize and sanitize notebook
         run: python scripts/sanitize_notebook.py
 
       - name: Commit sanitized notebook
         shell: bash
         run: |
           if git diff --quiet -- edith.ipynb; then
-            echo 'Notebook already sanitized.'
+            echo 'Notebook already normalized and sanitized.'
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add edith.ipynb
-          git commit -m 'security: externalize MT5 credentials and clear notebook outputs [skip sanitize]'
+          git commit -m 'security: normalize notebook, externalize MT5 credentials, and clear outputs [skip sanitize]'
           git push
