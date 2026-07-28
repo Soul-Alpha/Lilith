@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-"""Remove embedded MT5 credentials and saved notebook outputs.
+"""Normalize and sanitize the committed Edith notebook.
 
-This script only edits credential assignments/imports and output metadata. It does
-not modify trading calculations, signal generation, risk rules, or execution logic.
+This script preserves notebook source cells while removing embedded MT5
+credentials, saved outputs, execution counts, and invalid notebook metadata.
+It does not modify trading calculations, signal generation, risk rules, or
+execution logic.
 """
 
 from __future__ import annotations
 
-import json
+import os
 import re
 from pathlib import Path
+
+import nbformat
+from nbformat.validator import normalize
 
 NOTEBOOK = Path("edith.ipynb")
 
@@ -62,14 +67,15 @@ def sanitize_source(source: list[str]) -> tuple[list[str], bool]:
 
 
 def main() -> int:
-    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
-    changed = False
+    notebook = nbformat.read(NOTEBOOK, as_version=4)
+    normalization_changes, notebook = normalize(notebook, relax_add_props=True)
+    changed = normalization_changes > 0
 
-    for cell in notebook.get("cells", []):
-        if cell.get("cell_type") != "code":
+    for cell in notebook.cells:
+        if cell.cell_type != "code":
             continue
 
-        source, source_changed = sanitize_source(cell.get("source", []))
+        source, source_changed = sanitize_source(list(cell.get("source", [])))
         if source_changed:
             cell["source"] = source
             changed = True
@@ -82,15 +88,14 @@ def main() -> int:
             cell["execution_count"] = None
             changed = True
 
+    nbformat.validate(notebook)
+
     if not changed:
-        print("Notebook already sanitized.")
+        print("Notebook already normalized and sanitized.")
         return 0
 
-    NOTEBOOK.write_text(
-        json.dumps(notebook, ensure_ascii=False, indent=1) + "\n",
-        encoding="utf-8",
-    )
-    print("Sanitized edith.ipynb: credentials externalized and outputs cleared.")
+    nbformat.write(notebook, NOTEBOOK, version=4)
+    print("Normalized and sanitized edith.ipynb; source logic preserved.")
     return 0
 
 

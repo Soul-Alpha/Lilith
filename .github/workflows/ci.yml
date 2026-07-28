@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - "feature/**"
+      - "fix/**"
   pull_request:
     branches:
       - main
@@ -71,13 +72,18 @@ jobs:
       - name: Install notebook tooling
         run: python -m pip install --upgrade pip nbformat
 
+      - name: Normalize and sanitize notebook copy
+        run: python scripts/sanitize_notebook.py
+
       - name: Validate notebook JSON and cell structure
         run: |
           python - <<'PY'
           from pathlib import Path
           import nbformat
 
-          notebooks = sorted(Path('.').glob('*.ipynb')) + sorted(Path('notebooks').glob('*.ipynb')) if Path('notebooks').exists() else sorted(Path('.').glob('*.ipynb'))
+          notebooks = sorted(Path('.').glob('*.ipynb'))
+          if Path('notebooks').exists():
+              notebooks += sorted(Path('notebooks').glob('*.ipynb'))
           if not notebooks:
               raise SystemExit('No notebooks found to validate')
 
@@ -87,7 +93,7 @@ jobs:
               print(f'validated: {notebook_path}')
           PY
 
-      - name: Check committed notebook for obvious credentials
+      - name: Check sanitized notebook for obvious credentials
         shell: bash
         run: |
           set -euo pipefail
