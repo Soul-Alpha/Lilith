@@ -9,6 +9,7 @@ from .models import (
     Side,
     TradeForensicReport,
 )
+from .persistence import append_report_jsonl, report_record
 from .service import TradeForensicsService
 
 __all__ = [
@@ -20,4 +21,6 @@ __all__ = [
     "Side",
     "TradeForensicReport",
     "TradeForensicsService",
+    "append_report_jsonl",
+    "report_record",
 ]
