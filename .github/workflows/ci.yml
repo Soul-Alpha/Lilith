@@ -70,9 +70,9 @@ jobs:
           cache: pip
 
       - name: Install notebook tooling
-        run: python -m pip install --upgrade pip nbformat
+        run: python -m pip install --upgrade pip nbformat json-repair
 
-      - name: Normalize and sanitize notebook copy
+      - name: Repair, normalize, and sanitize notebook copy
         run: python scripts/sanitize_notebook.py
 
       - name: Validate notebook JSON and cell structure
