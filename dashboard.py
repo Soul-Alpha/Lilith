@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,19 @@ st.set_page_config(page_title="Edith Command Centre", page_icon="🧠", layout="
 
 DATA_PATH = Path(os.environ.get("EDITH_FORENSICS_PATH", "data/forensic_reports.jsonl"))
 SCULPTOR_PATH = Path(os.environ.get("EDITH_SCULPTOR_PATH", "data/feature_sculptor_results.jsonl"))
+STATUS_PATH = Path(os.environ.get("EDITH_RUNTIME_STATUS_PATH", "data/runtime_status.json"))
+SIGNALS_PATH = Path(os.environ.get("EDITH_SIGNALS_PATH", "data/signals.jsonl"))
+DEMO_TRADES_PATH = Path(os.environ.get("EDITH_DEMO_TRADES_PATH", "data/demo_trades.jsonl"))
+HEARTBEAT_STALE_SECONDS = int(os.environ.get("EDITH_HEARTBEAT_STALE_SECONDS", "20"))
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return value
 
 
 def load_jsonl(path: Path) -> pd.DataFrame:
@@ -36,18 +50,93 @@ def money(value: float) -> str:
     return f"${value:,.2f}"
 
 
+def heartbeat_age_seconds(status: dict[str, Any]) -> float | None:
+    raw = status.get("heartbeat_at")
+    if not raw:
+        return None
+    try:
+        heartbeat = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if heartbeat.tzinfo is None:
+        heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - heartbeat.astimezone(timezone.utc)).total_seconds())
+
+
 st.title("Edith Command Centre")
-st.caption("Read-only forensic and research intelligence. Trading and broker execution remain disabled in this interface.")
+st.caption("Demo-simulation runtime telemetry plus read-only forensic and research intelligence.")
 
 with st.sidebar:
     st.subheader("Data sources")
+    st.code(str(STATUS_PATH))
+    st.code(str(SIGNALS_PATH))
+    st.code(str(DEMO_TRADES_PATH))
     st.code(str(DATA_PATH))
     st.code(str(SCULPTOR_PATH))
     st.write("Execution mode:", os.environ.get("LILITH_EXECUTION_MODE", "simulation"))
-    refresh = st.button("Refresh data", use_container_width=True)
+    refresh = st.button("Refresh all data", use_container_width=True)
 
 if refresh:
     st.cache_data.clear()
+    st.rerun()
+
+
+@st.fragment(run_every=5)
+def live_runtime_panel() -> None:
+    try:
+        status = load_json(STATUS_PATH)
+        signals = load_jsonl(SIGNALS_PATH)
+        demo_trades = load_jsonl(DEMO_TRADES_PATH)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        st.error(f"Unable to load runtime telemetry: {exc}")
+        return
+
+    age = heartbeat_age_seconds(status)
+    connected = bool(status) and status.get("runtime") == "running" and age is not None and age <= HEARTBEAT_STALE_SECONDS
+    connection = "Online" if connected else "Offline"
+    detail = status.get("message", "No telemetry received.") if status else "No telemetry received."
+
+    st.subheader("Live demo runtime")
+    if connected:
+        st.success(f"Notebook connected — heartbeat {age:.1f}s ago")
+    else:
+        stale = f" Last heartbeat was {age:.1f}s ago." if age is not None else ""
+        st.warning(f"Notebook offline — {detail}{stale}")
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Connection", connection)
+    c2.metric("Runtime", str(status.get("runtime", "unknown")))
+    c3.metric("Iteration", f"{int(status.get('iteration', 0)):,}")
+    c4.metric("Signals", f"{int(status.get('signals_seen', len(signals))):,}")
+    c5.metric("Demo trades", f"{int(status.get('demo_trades', len(demo_trades))):,}")
+    c6.metric("Last signal", str(status.get("last_signal", "—")))
+
+    st.caption(
+        f"Mode: {status.get('mode', 'unknown')} · "
+        f"Symbol: {status.get('symbol', '—')} · "
+        f"Timeframe: {status.get('timeframe', '—')} · "
+        f"Session: {status.get('session_id', '—')}"
+    )
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown("#### Recent signals")
+        if signals.empty:
+            st.info("Awaiting notebook signal telemetry.")
+        else:
+            columns = [c for c in ["timestamp", "iteration", "symbol", "timeframe", "signal", "decision", "score", "reason"] if c in signals.columns]
+            st.dataframe(signals.tail(15).iloc[::-1][columns], use_container_width=True, hide_index=True)
+    with right:
+        st.markdown("#### Recent demo trades")
+        if demo_trades.empty:
+            st.info("No demo trades generated yet.")
+        else:
+            columns = [c for c in ["timestamp", "trade_id", "symbol", "side", "status", "net_realised_pnl", "r_multiple"] if c in demo_trades.columns]
+            st.dataframe(demo_trades.tail(15).iloc[::-1][columns], use_container_width=True, hide_index=True)
+
+
+live_runtime_panel()
+st.divider()
 
 try:
     reports = load_jsonl(DATA_PATH)
@@ -70,7 +159,7 @@ with forensics_tab:
     if reports.empty:
         st.info(
             "Awaiting forensic records. Configure EDITH_FORENSICS_PATH or write JSON Lines records to "
-            "data/forensic_reports.jsonl. No example trading performance is fabricated."
+            "data/forensic_reports.jsonl. Demo trades are displayed separately and are not treated as forensic evidence."
         )
     else:
         net_pnl = float(reports.get("net_realised_pnl", pd.Series(dtype=float)).fillna(0).sum())
@@ -143,6 +232,6 @@ with sculptor_tab:
 
 with st.expander("Record contracts"):
     st.write(
-        "Forensic and sculptor inputs use JSON Lines. Monetary values are displayed in US dollars ($); "
-        "R-multiples, profit factor, stability, confidence and percentages remain dimensionless."
+        "Runtime heartbeat, demo signals, and demo trades are operational telemetry only. "
+        "Forensic and sculptor inputs remain separate JSON Lines evidence streams."
     )
