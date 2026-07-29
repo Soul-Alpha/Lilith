@@ -1,23 +1,21 @@
 #!/usr/bin/env python3
-"""Repair, normalize, and sanitize the committed Edith notebook.
+"""Deterministically rebuild and sanitize the committed Edith notebook.
 
-This script preserves notebook source cells while repairing malformed JSON,
-removing embedded MT5 credentials, saved outputs, execution counts, and invalid
-notebook metadata. It does not modify trading calculations, signal generation,
-risk rules, or execution logic.
+The source notebook has malformed JSON and inconsistent legacy format metadata.
+This script recovers the cells, rebuilds a fresh nbformat-v4 container, removes
+saved outputs and embedded MT5 credentials, and validates the emitted notebook.
+Trading calculations and source ordering are otherwise preserved.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path
 from typing import Any
 
 import nbformat
 from json_repair import repair_json
-from nbformat.validator import normalize
 
 NOTEBOOK = Path("edith.ipynb")
 
@@ -34,110 +32,132 @@ REPLACEMENTS = {
 }
 
 
-def load_repaired_notebook(path: Path) -> tuple[nbformat.NotebookNode, bool]:
-    """Load valid JSON or conservatively repair a malformed notebook document."""
+def load_payload(path: Path) -> dict[str, Any]:
     raw = path.read_text(encoding="utf-8-sig")
-    repaired = False
-
     try:
         payload: Any = json.loads(raw)
     except json.JSONDecodeError as exc:
-        repaired_text = repair_json(raw, skip_json_loads=True)
+        repaired = repair_json(raw, skip_json_loads=True)
         try:
-            payload = json.loads(repaired_text)
+            payload = json.loads(repaired)
         except json.JSONDecodeError as repair_exc:
             raise ValueError(
-                f"Unable to repair notebook JSON after original error at "
+                "Unable to recover notebook JSON after original error at "
                 f"line {exc.lineno}, column {exc.colno}: {exc.msg}"
             ) from repair_exc
-        repaired = True
         print(
-            "Repaired malformed notebook JSON "
-            f"(original error: line {exc.lineno}, column {exc.colno}: {exc.msg})."
+            "Recovered malformed notebook JSON "
+            f"(line {exc.lineno}, column {exc.colno}: {exc.msg})."
         )
 
     if not isinstance(payload, dict):
         raise ValueError("Notebook root must be a JSON object")
     if not isinstance(payload.get("cells"), list):
         raise ValueError("Notebook must contain a cells array")
+    return payload
 
-    return nbformat.from_dict(payload), repaired
+
+def source_to_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "".join(str(part) for part in value)
+    if value is None:
+        return ""
+    return str(value)
 
 
-def sanitize_source(source: list[str]) -> tuple[list[str], bool]:
-    changed = False
+def sanitize_code(source: str) -> str:
+    lines = source.splitlines(keepends=True)
     output: list[str] = []
     needs_os = False
 
-    for line in source:
-        raw = line.rstrip("\n")
-        newline = "\n" if line.endswith("\n") else ""
-        replacement = None
+    for line in lines:
+        raw = line.rstrip("\r\n")
+        ending = line[len(raw) :]
+        replacement: str | None = None
 
         for name, pattern in ASSIGNMENT_PATTERNS.items():
             match = pattern.match(raw)
             if match:
-                replacement = f"{match.group('indent')}{REPLACEMENTS[name]}{newline}"
+                replacement = f"{match.group('indent')}{REPLACEMENTS[name]}{ending}"
                 needs_os = True
                 break
 
-        if replacement is not None:
-            if replacement != line:
-                changed = True
-            output.append(replacement)
-        else:
-            output.append(line)
+        output.append(replacement if replacement is not None else line)
 
-    if needs_os and not any(re.match(r"^\s*import\s+os(?:\s|$)", line) for line in output):
+    if needs_os and not any(
+        re.match(r"^\s*import\s+os(?:\s|$)", line) for line in output
+    ):
         insert_at = next(
-            (index for index, line in enumerate(output) if line.lstrip().startswith(("import ", "from "))),
+            (
+                index
+                for index, line in enumerate(output)
+                if line.lstrip().startswith(("import ", "from "))
+            ),
             0,
         )
         output.insert(insert_at, "import os\n")
-        changed = True
 
-    return output, changed
+    return "".join(output)
+
+
+def safe_metadata(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def rebuild_notebook(payload: dict[str, Any]) -> nbformat.NotebookNode:
+    rebuilt_cells: list[nbformat.NotebookNode] = []
+
+    for index, original in enumerate(payload["cells"]):
+        if not isinstance(original, dict):
+            print(f"Skipping non-object cell at index {index}.")
+            continue
+
+        cell_type = str(original.get("cell_type", "raw")).lower()
+        source = source_to_text(original.get("source", ""))
+        metadata = safe_metadata(original.get("metadata"))
+
+        if cell_type == "code":
+            rebuilt = nbformat.v4.new_code_cell(
+                source=sanitize_code(source),
+                metadata=metadata,
+                execution_count=None,
+                outputs=[],
+            )
+        elif cell_type == "markdown":
+            rebuilt = nbformat.v4.new_markdown_cell(source=source, metadata=metadata)
+        else:
+            # Unknown or legacy cell kinds are retained as raw text rather than lost.
+            rebuilt = nbformat.v4.new_raw_cell(source=source, metadata=metadata)
+
+        rebuilt_cells.append(rebuilt)
+
+    if not rebuilt_cells:
+        raise ValueError("No recoverable notebook cells were found")
+
+    root_metadata = safe_metadata(payload.get("metadata"))
+    notebook = nbformat.v4.new_notebook(cells=rebuilt_cells, metadata=root_metadata)
+    notebook["nbformat"] = 4
+    notebook["nbformat_minor"] = 5
+    return notebook
 
 
 def main() -> int:
-    notebook, repaired = load_repaired_notebook(NOTEBOOK)
-    normalization_changes, notebook = normalize(notebook, relax_add_props=True)
-    changed = repaired or bool(normalization_changes)
-
-    for cell in notebook.cells:
-        if cell.cell_type != "code":
-            continue
-
-        source_value = cell.get("source", [])
-        if isinstance(source_value, str):
-            source_lines = source_value.splitlines(keepends=True)
-        else:
-            source_lines = list(source_value)
-
-        source, source_changed = sanitize_source(source_lines)
-        if source_changed:
-            cell["source"] = source
-            changed = True
-
-        # Saved output can expose account IDs, balances, server names, and errors.
-        if cell.get("outputs"):
-            cell["outputs"] = []
-            changed = True
-        if cell.get("execution_count") is not None:
-            cell["execution_count"] = None
-            changed = True
+    payload = load_payload(NOTEBOOK)
+    notebook = rebuild_notebook(payload)
 
     nbformat.validate(notebook)
-
-    if not changed:
-        print("Notebook already valid, normalized, and sanitized.")
-        return 0
-
     nbformat.write(notebook, NOTEBOOK, version=4)
-    # Re-read the emitted file so CI proves the committed representation is valid.
+
+    # Validate the exact representation that will be committed.
     emitted = nbformat.read(NOTEBOOK, as_version=4)
     nbformat.validate(emitted)
-    print("Repaired, normalized, and sanitized edith.ipynb; source logic preserved.")
+
+    print(
+        f"Rebuilt and validated edith.ipynb as nbformat v4 with "
+        f"{len(emitted.cells)} preserved cells; outputs cleared and credentials externalized."
+    )
     return 0
 
 
