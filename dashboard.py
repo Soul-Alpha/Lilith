@@ -41,8 +41,9 @@ def load_jsonl(path: Path) -> pd.DataFrame:
                 value = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise ValueError(f"Invalid JSON in {path} line {number}: {exc}") from exc
-            if isinstance(value, dict):
-                rows.append(value)
+            if not isinstance(value, dict):
+                raise ValueError(f"{path} line {number} must contain a JSON object")
+            rows.append(value)
     return pd.DataFrame(rows)
 
 
@@ -50,7 +51,10 @@ def age_seconds(status: dict[str, Any]) -> float | None:
     raw = status.get("heartbeat_at")
     if not raw:
         return None
-    heartbeat = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    try:
+        heartbeat = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
     if heartbeat.tzinfo is None:
         heartbeat = heartbeat.replace(tzinfo=timezone.utc)
     return max(0.0, (datetime.now(timezone.utc) - heartbeat.astimezone(timezone.utc)).total_seconds())
@@ -65,11 +69,11 @@ def money(value: Any, currency: str = "USD") -> str:
 
 
 st.title("Edith Command Centre")
-st.caption("Live MT5 demo-account execution telemetry, signals, broker orders, deals, and research intelligence.")
+st.caption("Governed MT5 demo execution telemetry with preserved forensic and feature-research intelligence.")
 
 with st.sidebar:
     st.subheader("Runtime files")
-    for path in (STATUS_PATH, SIGNALS_PATH, ORDERS_PATH, DEALS_PATH):
+    for path in (STATUS_PATH, SIGNALS_PATH, ORDERS_PATH, DEALS_PATH, FORENSICS_PATH, SCULPTOR_PATH):
         st.code(str(path))
     st.write("Requested mode:", os.getenv("LILITH_EXECUTION_MODE", "not set"))
     if st.button("Refresh all data", use_container_width=True):
@@ -95,7 +99,7 @@ def runtime_panel() -> None:
     if broker_online:
         st.success(f"MT5 demo connected — account {status.get('account_login', '—')} · heartbeat {age:.1f}s ago")
     elif notebook_online:
-        st.warning(f"Notebook online, but MT5 broker connection is {status.get('broker_connection', 'unknown')}.")
+        st.warning(f"Notebook online, but MT5 connection is {status.get('broker_connection', 'unknown')}.")
     else:
         stale = f" Last heartbeat {age:.1f}s ago." if age is not None else ""
         st.error(f"Edith offline — {status.get('message', 'No runtime telemetry.')}{stale}")
@@ -108,12 +112,13 @@ def runtime_panel() -> None:
     e.metric("Floating PnL", money(status.get("account_profit"), currency))
     f.metric("Open positions", f"{int(status.get('open_positions', 0)):,}")
 
-    g, h, i, j, k = st.columns(5)
-    g.metric("Iteration", f"{int(status.get('iteration', 0)):,}")
-    h.metric("Signals", f"{int(status.get('signals_seen', len(signals))):,}")
-    i.metric("Orders accepted", f"{int(status.get('orders_sent', 0)):,}")
-    j.metric("Broker deals", f"{len(deals):,}")
-    k.metric("Last signal", str(status.get("last_signal", "—")))
+    g, h, i, j, k, l = st.columns(6)
+    g.metric("Pending orders", f"{int(status.get('pending_orders', 0)):,}")
+    h.metric("Iteration", f"{int(status.get('iteration', 0)):,}")
+    i.metric("Signals", f"{int(status.get('signals_seen', len(signals))):,}")
+    j.metric("Orders accepted", f"{int(status.get('orders_sent', 0)):,}")
+    k.metric("Daily realised", money(status.get("daily_realised_pnl"), currency))
+    l.metric("Last signal", str(status.get("last_signal", "—")))
 
     st.caption(
         f"Mode: {status.get('mode', 'unknown')} · Server: {status.get('account_server', '—')} · "
@@ -124,19 +129,19 @@ def runtime_panel() -> None:
     signal_tab, order_tab, deal_tab = st.tabs(["Signals", "MT5 orders", "MT5 deals"])
     with signal_tab:
         if signals.empty:
-            st.info("Awaiting MT5 market signal telemetry.")
+            st.info("Awaiting completed-candle MT5 signal telemetry.")
         else:
-            cols = [c for c in ["timestamp", "iteration", "symbol", "timeframe", "signal", "decision", "score", "fast_sma", "slow_sma", "atr", "reason"] if c in signals]
+            cols = [c for c in ["timestamp", "candle_time", "signal_key", "symbol", "timeframe", "signal", "decision", "score", "fast_sma", "slow_sma", "atr", "reason"] if c in signals]
             st.dataframe(signals.tail(25).iloc[::-1][cols], use_container_width=True, hide_index=True)
     with order_tab:
         if orders.empty:
             st.info("No MT5 order attempts recorded yet.")
         else:
-            cols = [c for c in ["timestamp", "status", "order", "deal", "symbol", "side", "volume", "price", "sl", "tp", "retcode", "comment"] if c in orders]
+            cols = [c for c in ["timestamp", "status", "order", "deal", "symbol", "side", "volume", "price", "sl", "tp", "projected_risk_cash", "retcode", "comment"] if c in orders]
             st.dataframe(orders.tail(25).iloc[::-1][cols], use_container_width=True, hide_index=True)
     with deal_tab:
         if deals.empty:
-            st.info("No Edith MT5 deals recorded in this runtime session.")
+            st.info("No Edith MT5 deals recorded yet.")
         else:
             cols = [c for c in ["timestamp", "ticket", "order", "position_id", "symbol", "entry", "volume", "price", "profit", "commission", "swap", "fee", "comment"] if c in deals]
             st.dataframe(deals.tail(25).iloc[::-1][cols], use_container_width=True, hide_index=True)
@@ -152,16 +157,66 @@ except (OSError, ValueError) as exc:
     st.error(f"Unable to load research records: {exc}")
     st.stop()
 
+for column in ("net_realised_pnl", "r_multiple", "mfe_r", "mae_r", "peak_floating_pnl", "trough_floating_pnl"):
+    if column in forensic:
+        forensic[column] = pd.to_numeric(forensic[column], errors="coerce")
+for column in ("expectancy_pnl", "expectancy_r", "profit_factor", "max_drawdown", "stability_score", "sample_size", "win_rate"):
+    if column in sculptor:
+        sculptor[column] = pd.to_numeric(sculptor[column], errors="coerce")
+
 forensic_tab, sculptor_tab = st.tabs(["Trade Forensics", "Feature Sculptor"])
 with forensic_tab:
     if forensic.empty:
-        st.info("Awaiting completed forensic records. MT5 runtime deals remain operational telemetry until reconciled into forensic reports.")
+        st.info("Awaiting completed forensic reports. MT5 runtime deals remain operational telemetry until reconciled.")
     else:
-        cols = [c for c in ["trade_id", "exit_timestamp", "exit_reason", "net_realised_pnl", "r_multiple", "mfe_r", "mae_r", "management_quality", "primary_cause"] if c in forensic]
+        net_pnl = float(forensic.get("net_realised_pnl", pd.Series(dtype=float)).fillna(0).sum())
+        trade_count = len(forensic)
+        wins = int((forensic.get("net_realised_pnl", pd.Series(dtype=float)).fillna(0) > 0).sum())
+        win_rate = wins / trade_count * 100 if trade_count else 0.0
+        avg_r_series = forensic.get("r_multiple", pd.Series(dtype=float)).dropna()
+        avg_r = float(avg_r_series.mean()) if not avg_r_series.empty else 0.0
+        surrendered = int(forensic.get("management_quality", pd.Series(dtype=str)).isin(["profit_surrendered", "breakeven_or_trailing_candidate"]).sum())
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Net realised PnL", money(net_pnl))
+        c2.metric("Closed trades", f"{trade_count:,}")
+        c3.metric("Win rate", f"{win_rate:.1f}%")
+        c4.metric("Average R", f"{avg_r:.2f}R")
+        c5.metric("Profit surrendered", f"{surrendered:,}")
+
+        left, right = st.columns([2, 1])
+        with left:
+            performance = forensic.copy()
+            if "exit_timestamp" in performance:
+                performance["exit_timestamp"] = pd.to_datetime(performance["exit_timestamp"], errors="coerce", utc=True)
+                performance = performance.sort_values("exit_timestamp")
+            performance["cumulative_pnl"] = performance.get("net_realised_pnl", 0).fillna(0).cumsum()
+            st.subheader("Cumulative realised performance")
+            st.line_chart(performance, y="cumulative_pnl")
+        with right:
+            st.subheader("Exit distribution")
+            if "exit_reason" in forensic:
+                st.bar_chart(forensic["exit_reason"].value_counts())
+            else:
+                st.info("Exit reason data unavailable")
+
+        cols = [c for c in ["trade_id", "exit_timestamp", "exit_reason", "net_realised_pnl", "r_multiple", "mfe_r", "mae_r", "direction_quality", "entry_quality", "stop_quality", "target_quality", "management_quality", "primary_cause"] if c in forensic]
+        st.subheader("Loss-forensics breakdown")
         st.dataframe(forensic[cols], use_container_width=True, hide_index=True)
+        if "primary_cause" in forensic:
+            st.subheader("Primary causes")
+            st.bar_chart(forensic["primary_cause"].value_counts())
+
 with sculptor_tab:
+    st.caption("Research-only rankings. Approval does not authorize automatic strategy mutation.")
     if sculptor.empty:
         st.info("Awaiting feature-sculptor results.")
     else:
-        cols = [c for c in ["fingerprint", "sample_size", "win_rate", "expectancy_r", "profit_factor", "max_drawdown", "stability_score", "approved", "rejection_reasons"] if c in sculptor]
+        approved = sculptor.get("approved", pd.Series(dtype=bool)).fillna(False).astype(bool)
+        a1, a2, a3 = st.columns(3)
+        a1.metric("Fingerprints analysed", f"{len(sculptor):,}")
+        a2.metric("Evidence-approved", f"{int(approved.sum()):,}")
+        expectancy = sculptor.get("expectancy_r", pd.Series(dtype=float)).dropna()
+        a3.metric("Best expectancy", f"{float(expectancy.max()) if not expectancy.empty else 0.0:.2f}R")
+        cols = [c for c in ["fingerprint", "sample_size", "win_rate", "expectancy_pnl", "expectancy_r", "profit_factor", "max_drawdown", "stability_score", "approved", "rejection_reasons"] if c in sculptor]
         st.dataframe(sculptor[cols], use_container_width=True, hide_index=True)
