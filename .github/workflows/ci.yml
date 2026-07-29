@@ -35,24 +35,25 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-
       - name: Upgrade packaging tools
         run: python -m pip install --upgrade pip setuptools wheel
-
       - name: Install project and test dependencies
         run: python -m pip install -e ".[dev]"
-
-      - name: Compile Python sources
-        run: python -m compileall -q src tests scripts
-
-      - name: Run test suite
-        run: python -m pytest -q
+      - name: Compile Python sources and dashboard
+        run: python -m compileall -q src tests scripts dashboard.py
+      - name: Run test suite with coverage
+        run: python -m pytest --cov=lilith --cov-report=term-missing --cov-fail-under=65
+      - name: Prove MT5 package is not required for mocked tests
+        run: |
+          python - <<'PY'
+          from lilith.mt5_demo import MT5DemoRuntime, MarketSnapshot, RuntimeLock
+          print(MT5DemoRuntime.__name__, MarketSnapshot.__name__, RuntimeLock.__name__)
+          PY
 
   notebook-validation:
     name: Notebook validation
@@ -62,22 +63,15 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-
       - name: Install notebook tooling
         run: python -m pip install --upgrade pip nbformat json-repair
-
       - name: Repair, normalize, and sanitize notebook copy
         run: python scripts/sanitize_notebook.py
-
-      - name: Normalize and sanitize notebook copy
-        run: python scripts/sanitize_notebook.py
-
       - name: Fail if notebook was not pre-sanitized in commit
         shell: bash
         run: |
@@ -86,33 +80,49 @@ jobs:
             git --no-pager diff -- edith.ipynb
             exit 1
           fi
-
       - name: Validate notebook JSON and cell structure
         run: |
           python - <<'PY'
           from pathlib import Path
           import nbformat
-
           notebooks = sorted(Path('.').glob('*.ipynb'))
           if Path('notebooks').exists():
               notebooks += sorted(Path('notebooks').glob('*.ipynb'))
           if not notebooks:
               raise SystemExit('No notebooks found to validate')
-
           for notebook_path in notebooks:
               notebook = nbformat.read(notebook_path, as_version=4)
               nbformat.validate(notebook)
               print(f'validated: {notebook_path}')
           PY
-
-      - name: Check sanitized notebook for obvious credentials
-        shell: bash
+      - name: Validate Edith launcher and credential contract
         run: |
-          set -euo pipefail
-          if grep -RInE --include='*.ipynb' '(MT5_PASSWORD\s*[=:]|password\s*[=:]\s*["'"'][^"'"']+["'"']|login\s*[=:]\s*[0-9]{5,})' .; then
-            echo 'Potential credential found in notebook content.'
-            exit 1
-          fi
+          python - <<'PY'
+          import re
+          import nbformat
+          notebook = nbformat.read('edith.ipynb', as_version=4)
+          code_source = '\n'.join(str(cell.source) for cell in notebook.cells if cell.cell_type == 'code')
+          required = ['from lilith.mt5_demo import run_from_environment', 'run_from_environment()']
+          missing = [value for value in required if value not in code_source]
+          if missing:
+              raise SystemExit(f'Missing notebook launcher contract: {missing}')
+          forbidden_calls = ['mt5.order_send(', 'MetaTrader5.order_send(', 'os.environ.setdefault(']
+          found_calls = [value for value in forbidden_calls if value in code_source]
+          credential_patterns = [
+              r"MT5_PASSWORD['\"]?\s*[:=]\s*['\"][^'\"]+['\"]",
+              r"MT5_LOGIN['\"]?\s*[:=]\s*['\"]?\d{5,}",
+              r"MT5_SERVER['\"]?\s*[:=]\s*['\"][^'\"]+['\"]",
+          ]
+          found_credentials = [pattern for pattern in credential_patterns if re.search(pattern, code_source)]
+          outputs = [output for cell in notebook.cells if cell.cell_type == 'code' for output in cell.get('outputs', [])]
+          execution_counts = [cell.execution_count for cell in notebook.cells if cell.cell_type == 'code' and cell.execution_count is not None]
+          if found_calls or found_credentials or outputs or execution_counts:
+              raise SystemExit(
+                  f'Unsafe notebook content: calls={found_calls}, credentials={found_credentials}, '
+                  f'outputs={len(outputs)}, execution_counts={execution_counts}'
+              )
+          print('notebook launcher and credential contract validated')
+          PY
 
   security-baseline:
     name: Security baseline
@@ -124,7 +134,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Run TruffleHog secret scan
         uses: trufflesecurity/trufflehog@v3.88.35
         with:
