@@ -37,8 +37,14 @@ jobs:
       - name: Validate repaired notebook
         run: |
           python - <<'PY'
+          import json
+          from pathlib import Path
           import nbformat
-          notebook = nbformat.read('edith.ipynb', as_version=4)
+
+          path = Path('edith.ipynb')
+          with path.open('r', encoding='utf-8') as handle:
+              json.load(handle)
+          notebook = nbformat.read(path, as_version=4)
           nbformat.validate(notebook)
           print('validated: edith.ipynb')
           PY
@@ -59,6 +65,5 @@ jobs:
             - clears saved outputs and execution counts
             - externalizes MT5 credentials
             - preserves trading source cells
-          labels: automation,security
           add-paths: |
             edith.ipynb
