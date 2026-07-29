@@ -1,15 +1,27 @@
 #!/usr/bin/env python3
+<<<<<<< HEAD
 """Repair, normalize, and sanitize the committed Edith notebook.
 
 This script preserves notebook source cells while repairing malformed JSON,
 removing embedded MT5 credentials, saved outputs, execution counts, and invalid
 notebook metadata. It does not modify trading calculations, signal generation,
 risk rules, or execution logic.
+=======
+"""Normalize and sanitize the committed Edith notebook.
+
+This script preserves notebook source cells while removing embedded MT5
+credentials, saved outputs, execution counts, and invalid notebook metadata.
+It does not modify trading calculations, signal generation, risk rules, or
+execution logic.
+>>>>>>> origin/main
 """
 
 from __future__ import annotations
 
+<<<<<<< HEAD
 import json
+=======
+>>>>>>> origin/main
 import os
 import re
 from pathlib import Path
@@ -17,6 +29,9 @@ from typing import Any
 
 import nbformat
 from json_repair import repair_json
+from nbformat.validator import normalize
+
+import nbformat
 from nbformat.validator import normalize
 
 NOTEBOOK = Path("edith.ipynb")
@@ -100,14 +115,21 @@ def sanitize_source(source: list[str]) -> tuple[list[str], bool]:
 
 
 def main() -> int:
+<<<<<<< HEAD
     notebook, repaired = load_repaired_notebook(NOTEBOOK)
     normalization_changes, notebook = normalize(notebook, relax_add_props=True)
     changed = repaired or normalization_changes > 0
+=======
+    notebook = nbformat.read(NOTEBOOK, as_version=4)
+    normalization_changes, notebook = normalize(notebook, relax_add_props=True)
+    changed = normalization_changes > 0
+>>>>>>> origin/main
 
     for cell in notebook.cells:
         if cell.cell_type != "code":
             continue
 
+<<<<<<< HEAD
         source_value = cell.get("source", [])
         if isinstance(source_value, str):
             source_lines = source_value.splitlines(keepends=True)
@@ -115,6 +137,9 @@ def main() -> int:
             source_lines = list(source_value)
 
         source, source_changed = sanitize_source(source_lines)
+=======
+        source, source_changed = sanitize_source(list(cell.get("source", [])))
+>>>>>>> origin/main
         if source_changed:
             cell["source"] = source
             changed = True
@@ -130,6 +155,7 @@ def main() -> int:
     nbformat.validate(notebook)
 
     if not changed:
+<<<<<<< HEAD
         print("Notebook already valid, normalized, and sanitized.")
         return 0
 
@@ -138,6 +164,13 @@ def main() -> int:
     emitted = nbformat.read(NOTEBOOK, as_version=4)
     nbformat.validate(emitted)
     print("Repaired, normalized, and sanitized edith.ipynb; source logic preserved.")
+=======
+        print("Notebook already normalized and sanitized.")
+        return 0
+
+    nbformat.write(notebook, NOTEBOOK, version=4)
+    print("Normalized and sanitized edith.ipynb; source logic preserved.")
+>>>>>>> origin/main
     return 0
 
 

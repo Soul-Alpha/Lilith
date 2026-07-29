@@ -75,6 +75,9 @@ jobs:
       - name: Repair, normalize, and sanitize notebook copy
         run: python scripts/sanitize_notebook.py
 
+      - name: Normalize and sanitize notebook copy
+        run: python scripts/sanitize_notebook.py
+
       - name: Validate notebook JSON and cell structure
         run: |
           python - <<'PY'
