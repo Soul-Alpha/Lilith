@@ -28,34 +28,20 @@ jobs:
           python-version: '3.12'
 
       - name: Install notebook tooling
-<<<<<<< HEAD
         run: python -m pip install --upgrade pip nbformat json-repair
 
       - name: Repair, normalize, and sanitize notebook
-=======
-        run: python -m pip install --upgrade pip nbformat
-
-      - name: Normalize and sanitize notebook
->>>>>>> origin/main
         run: python scripts/sanitize_notebook.py
 
       - name: Commit sanitized notebook
         shell: bash
         run: |
           if git diff --quiet -- edith.ipynb; then
-<<<<<<< HEAD
             echo 'Notebook already valid, normalized, and sanitized.'
-=======
-            echo 'Notebook already normalized and sanitized.'
->>>>>>> origin/main
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add edith.ipynb
-<<<<<<< HEAD
           git commit -m 'security: repair notebook JSON, externalize MT5 credentials, and clear outputs [skip sanitize]'
-=======
-          git commit -m 'security: normalize notebook, externalize MT5 credentials, and clear outputs [skip sanitize]'
->>>>>>> origin/main
           git push
