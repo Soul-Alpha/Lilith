@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
-"""Normalize and sanitize the committed Edith notebook.
+"""Repair, normalize, and sanitize the committed Edith notebook.
 
-This script preserves notebook source cells while removing embedded MT5
-credentials, saved outputs, execution counts, and invalid notebook metadata.
-It does not modify trading calculations, signal generation, risk rules, or
-execution logic.
+This script preserves notebook source cells while repairing malformed JSON,
+removing embedded MT5 credentials, saved outputs, execution counts, and invalid
+notebook metadata. It does not modify trading calculations, signal generation,
+risk rules, or execution logic.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 import nbformat
+from json_repair import repair_json
 from nbformat.validator import normalize
 
 NOTEBOOK = Path("edith.ipynb")
@@ -29,6 +32,36 @@ REPLACEMENTS = {
     "password": 'password = os.environ["MT5_PASSWORD"]  # Never commit credentials',
     "server": 'server = os.environ["MT5_SERVER"]  # Required environment variable',
 }
+
+
+def load_repaired_notebook(path: Path) -> tuple[nbformat.NotebookNode, bool]:
+    """Load valid JSON or conservatively repair a malformed notebook document."""
+    raw = path.read_text(encoding="utf-8-sig")
+    repaired = False
+
+    try:
+        payload: Any = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        repaired_text = repair_json(raw, skip_json_loads=True)
+        try:
+            payload = json.loads(repaired_text)
+        except json.JSONDecodeError as repair_exc:
+            raise ValueError(
+                f"Unable to repair notebook JSON after original error at "
+                f"line {exc.lineno}, column {exc.colno}: {exc.msg}"
+            ) from repair_exc
+        repaired = True
+        print(
+            "Repaired malformed notebook JSON "
+            f"(original error: line {exc.lineno}, column {exc.colno}: {exc.msg})."
+        )
+
+    if not isinstance(payload, dict):
+        raise ValueError("Notebook root must be a JSON object")
+    if not isinstance(payload.get("cells"), list):
+        raise ValueError("Notebook must contain a cells array")
+
+    return nbformat.from_dict(payload), repaired
 
 
 def sanitize_source(source: list[str]) -> tuple[list[str], bool]:
@@ -67,15 +100,21 @@ def sanitize_source(source: list[str]) -> tuple[list[str], bool]:
 
 
 def main() -> int:
-    notebook = nbformat.read(NOTEBOOK, as_version=4)
+    notebook, repaired = load_repaired_notebook(NOTEBOOK)
     normalization_changes, notebook = normalize(notebook, relax_add_props=True)
-    changed = normalization_changes > 0
+    changed = repaired or bool(normalization_changes)
 
     for cell in notebook.cells:
         if cell.cell_type != "code":
             continue
 
-        source, source_changed = sanitize_source(list(cell.get("source", [])))
+        source_value = cell.get("source", [])
+        if isinstance(source_value, str):
+            source_lines = source_value.splitlines(keepends=True)
+        else:
+            source_lines = list(source_value)
+
+        source, source_changed = sanitize_source(source_lines)
         if source_changed:
             cell["source"] = source
             changed = True
@@ -91,11 +130,14 @@ def main() -> int:
     nbformat.validate(notebook)
 
     if not changed:
-        print("Notebook already normalized and sanitized.")
+        print("Notebook already valid, normalized, and sanitized.")
         return 0
 
     nbformat.write(notebook, NOTEBOOK, version=4)
-    print("Normalized and sanitized edith.ipynb; source logic preserved.")
+    # Re-read the emitted file so CI proves the committed representation is valid.
+    emitted = nbformat.read(NOTEBOOK, as_version=4)
+    nbformat.validate(emitted)
+    print("Repaired, normalized, and sanitized edith.ipynb; source logic preserved.")
     return 0
 
 

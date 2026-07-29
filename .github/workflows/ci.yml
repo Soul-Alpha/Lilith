@@ -70,10 +70,22 @@ jobs:
           cache: pip
 
       - name: Install notebook tooling
-        run: python -m pip install --upgrade pip nbformat
+        run: python -m pip install --upgrade pip nbformat json-repair
+
+      - name: Repair, normalize, and sanitize notebook copy
+        run: python scripts/sanitize_notebook.py
 
       - name: Normalize and sanitize notebook copy
         run: python scripts/sanitize_notebook.py
+
+      - name: Fail if notebook was not pre-sanitized in commit
+        shell: bash
+        run: |
+          if ! git diff --quiet -- edith.ipynb; then
+            echo 'edith.ipynb was modified by scripts/sanitize_notebook.py. Commit the sanitized notebook.'
+            git --no-pager diff -- edith.ipynb
+            exit 1
+          fi
 
       - name: Validate notebook JSON and cell structure
         run: |
