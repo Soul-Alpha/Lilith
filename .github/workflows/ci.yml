@@ -48,11 +48,18 @@ jobs:
       - name: Install project and test dependencies
         run: python -m pip install -e ".[dev]"
 
-      - name: Compile Python sources
-        run: python -m compileall -q src tests scripts
+      - name: Compile Python sources and dashboard
+        run: python -m compileall -q src tests scripts dashboard.py
 
-      - name: Run test suite
-        run: python -m pytest -q
+      - name: Run test suite with coverage
+        run: python -m pytest --cov=lilith --cov-report=term-missing --cov-fail-under=65
+
+      - name: Prove MT5 package is not required for mocked tests
+        run: |
+          python - <<'PY'
+          from lilith.mt5_demo import MT5DemoRuntime, MarketSnapshot, RuntimeLock
+          print(MT5DemoRuntime.__name__, MarketSnapshot.__name__, RuntimeLock.__name__)
+          PY
 
   notebook-validation:
     name: Notebook validation
@@ -75,9 +82,6 @@ jobs:
       - name: Repair, normalize, and sanitize notebook copy
         run: python scripts/sanitize_notebook.py
 
-      - name: Normalize and sanitize notebook copy
-        run: python scripts/sanitize_notebook.py
-
       - name: Fail if notebook was not pre-sanitized in commit
         shell: bash
         run: |
@@ -98,11 +102,27 @@ jobs:
               notebooks += sorted(Path('notebooks').glob('*.ipynb'))
           if not notebooks:
               raise SystemExit('No notebooks found to validate')
-
           for notebook_path in notebooks:
               notebook = nbformat.read(notebook_path, as_version=4)
               nbformat.validate(notebook)
               print(f'validated: {notebook_path}')
+          PY
+
+      - name: Validate Edith launcher contract
+        run: |
+          python - <<'PY'
+          import nbformat
+          notebook = nbformat.read('edith.ipynb', as_version=4)
+          source = '\n'.join(''.join(cell.get('source', '')) for cell in notebook.cells)
+          required = ['from lilith.mt5_demo import run_from_environment', 'run_from_environment()']
+          missing = [value for value in required if value not in source]
+          if missing:
+              raise SystemExit(f'Missing notebook launcher contract: {missing}')
+          forbidden = ['mt5.order_send(', 'MT5_PASSWORD =', 'password="']
+          found = [value for value in forbidden if value in source]
+          if found:
+              raise SystemExit(f'Unsafe notebook content: {found}')
+          print('notebook launcher contract validated')
           PY
 
       - name: Check sanitized notebook for obvious credentials
