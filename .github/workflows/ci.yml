@@ -52,7 +52,9 @@ jobs:
         run: |
           python - <<'PY'
           from lilith.mt5_demo import MT5DemoRuntime, MarketSnapshot, RuntimeLock
-          print(MT5DemoRuntime.__name__, MarketSnapshot.__name__, RuntimeLock.__name__)
+          from lilith.mt5_reconciliation import MT5ForensicReconciler
+          from lilith.reconciled_runtime import ReconciledMT5DemoRuntime
+          print(MT5DemoRuntime.__name__, MarketSnapshot.__name__, RuntimeLock.__name__, MT5ForensicReconciler.__name__, ReconciledMT5DemoRuntime.__name__)
           PY
 
   notebook-validation:
@@ -102,7 +104,7 @@ jobs:
           import nbformat
           notebook = nbformat.read('edith.ipynb', as_version=4)
           code_source = '\n'.join(str(cell.source) for cell in notebook.cells if cell.cell_type == 'code')
-          required = ['from lilith.mt5_demo import run_from_environment', 'run_from_environment()']
+          required = ['from lilith.reconciled_runtime import run_from_environment', 'run_from_environment()']
           missing = [value for value in required if value not in code_source]
           if missing:
               raise SystemExit(f'Missing notebook launcher contract: {missing}')
