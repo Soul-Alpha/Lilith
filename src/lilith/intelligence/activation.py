@@ -102,7 +102,6 @@ class ObservationActivationService:
             higher_timeframe_alignment=context.higher_timeframe_alignment,
         )
         regime = self.regimes.classify(state)
-        state.feature_values.update if False else None  # frozen mapping remains authoritative
         record_id = str(uuid5(NAMESPACE_URL, f"edith:{context.source_key}"))
         observation = Observation(
             timestamp_utc=latest.timestamp_utc.astimezone(timezone.utc),
@@ -118,7 +117,6 @@ class ObservationActivationService:
             self.store.append(observation)
             persisted = True
         except Exception as exc:
-            # SQLite primary-key rejection is the expected idempotency mechanism.
             if "UNIQUE constraint failed" not in str(exc):
                 raise
             persisted = False
