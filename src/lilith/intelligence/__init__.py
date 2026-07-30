@@ -1,5 +1,6 @@
 from .activation import ActivationContext, ActivationResult, ObservationActivationService
 from .engines import Candle, LiquidityIntelligenceEngine, MarketStateEngine, SessionIntelligenceEngine, TrendStateEngine
+from .execution import ExecutionIntelligenceEngine, ExecutionQualityReport
 from .models import (
     EvidenceStage,
     LiquidityState,
@@ -14,6 +15,7 @@ from .models import (
 from .olympus_compatibility import OlympusCompatibilityAdapter
 from .patterns import EvidencePolicy, FeatureEvidenceEngine, PatternDNA, PatternDNAEngine
 from .persistence import ObservationStore
+from .portfolio import ConcentrationReport, PortfolioIntelligenceEngine, PortfolioRiskReport, PortfolioTrade
 from .probability import BayesianProbabilityEngine, DriftAssessment, DriftMonitor, ProbabilityEstimate
 from .regimes import MarketRegime, MarketRegimeClassifier, RegimeAssessment
 
@@ -22,10 +24,13 @@ __all__ = [
     "ActivationResult",
     "BayesianProbabilityEngine",
     "Candle",
+    "ConcentrationReport",
     "DriftAssessment",
     "DriftMonitor",
     "EvidencePolicy",
     "EvidenceStage",
+    "ExecutionIntelligenceEngine",
+    "ExecutionQualityReport",
     "FeatureEvidenceEngine",
     "LiquidityIntelligenceEngine",
     "LiquidityState",
@@ -40,6 +45,9 @@ __all__ = [
     "Outcome",
     "PatternDNA",
     "PatternDNAEngine",
+    "PortfolioIntelligenceEngine",
+    "PortfolioRiskReport",
+    "PortfolioTrade",
     "ProbabilityEstimate",
     "RegimeAssessment",
     "SessionIntelligenceEngine",
