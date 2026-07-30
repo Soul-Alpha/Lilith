@@ -44,14 +44,13 @@ class ReconciledMT5DemoRuntime(MT5DemoRuntime):
         new_deals_after = self.record_deals()
         forensic_added = self.reconciler.reconcile()
         if new_deals_before or new_deals_after or snapshots or forensic_added:
-            status = self.publish(
-                **status,
-                new_deals=int(status.get("new_deals", 0)) + new_deals_before + new_deals_after,
-                position_snapshots=snapshots,
-                forensic_reports_added=forensic_added,
-                reconciliation_at=datetime.now(timezone.utc).isoformat(),
-                message="Governed MT5 telemetry and forensic reconciliation received.",
-            )
+            # Calculate aggregated metrics and update status before publishing
+            status["new_deals"] = int(status.get("new_deals", 0)) + new_deals_before + new_deals_after
+            status["position_snapshots"] = snapshots
+            status["forensic_reports_added"] = forensic_added
+            status["reconciliation_at"] = datetime.now(timezone.utc).isoformat()
+            status["message"] = "Governed MT5 telemetry and forensic reconciliation received."
+            status = self.publish(**status)
         return status
 
 
