@@ -10,6 +10,7 @@ from .adaptation import (
     AutonomousAdaptationController,
     LiveAdaptationEvidence,
 )
+from .adaptation_telemetry import AdaptationTelemetryPaths, AdaptationTelemetryStore
 from .engines import Candle, LiquidityIntelligenceEngine, MarketStateEngine, SessionIntelligenceEngine, TrendStateEngine
 from .execution import ExecutionIntelligenceEngine, ExecutionQualityReport
 from .governance import (
@@ -56,6 +57,8 @@ __all__ = [
     "AdaptationPolicy",
     "AdaptationStage",
     "AdaptationState",
+    "AdaptationTelemetryPaths",
+    "AdaptationTelemetryStore",
     "AutonomousAdaptationController",
     "BackfillCheckpointStore",
     "BayesianProbabilityEngine",
