@@ -1,4 +1,15 @@
 from .activation import ActivationContext, ActivationResult, ObservationActivationService
+from .adaptation import (
+    ActivationAdapter,
+    AdaptationAction,
+    AdaptationCandidate,
+    AdaptationDecision,
+    AdaptationPolicy,
+    AdaptationStage,
+    AdaptationState,
+    AutonomousAdaptationController,
+    LiveAdaptationEvidence,
+)
 from .engines import Candle, LiquidityIntelligenceEngine, MarketStateEngine, SessionIntelligenceEngine, TrendStateEngine
 from .execution import ExecutionIntelligenceEngine, ExecutionQualityReport
 from .governance import (
@@ -36,8 +47,16 @@ from .probability import BayesianProbabilityEngine, DriftAssessment, DriftMonito
 from .regimes import MarketRegime, MarketRegimeClassifier, RegimeAssessment
 
 __all__ = [
+    "ActivationAdapter",
     "ActivationContext",
     "ActivationResult",
+    "AdaptationAction",
+    "AdaptationCandidate",
+    "AdaptationDecision",
+    "AdaptationPolicy",
+    "AdaptationStage",
+    "AdaptationState",
+    "AutonomousAdaptationController",
     "BackfillCheckpointStore",
     "BayesianProbabilityEngine",
     "Candle",
@@ -61,6 +80,7 @@ __all__ = [
     "LearningRecommendation",
     "LiquidityIntelligenceEngine",
     "LiquidityState",
+    "LiveAdaptationEvidence",
     "MarketRegime",
     "MarketRegimeClassifier",
     "MarketStateEngine",
