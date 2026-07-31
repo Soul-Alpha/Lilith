@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from inspect import signature
 from typing import Any
 
 from .mt5_demo import MT5DemoRuntime, append_jsonl, now
@@ -11,7 +12,18 @@ class ReconciledMT5DemoRuntime(MT5DemoRuntime):
     """Adds analytics-only lifecycle capture and reconciliation to Edith execution."""
 
     def __init__(self, mt5: Any | None = None, data_dir: str = "data") -> None:
-        super().__init__(mt5=mt5, data_dir=data_dir)
+        # Support both the current injectable MT5 runtime constructor and older
+        # local editable installs whose base constructor only accepts data_dir.
+        parameters = signature(MT5DemoRuntime.__init__).parameters
+        kwargs: dict[str, Any] = {}
+        if "data_dir" in parameters:
+            kwargs["data_dir"] = data_dir
+        if "mt5" in parameters:
+            kwargs["mt5"] = mt5
+        super().__init__(**kwargs)
+        if "mt5" not in parameters and mt5 is not None:
+            self.mt5 = mt5
+
         self.position_snapshots_path = self.data_dir / "mt5_position_snapshots.jsonl"
         self.reconciler = MT5ForensicReconciler(self.data_dir)
 

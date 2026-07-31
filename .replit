@@ -1,11 +1,13 @@
-entrypoint = "dashboard.py"
+entrypoint = "dashboard_app.py"
 
-run = "python -m pip install -e . && streamlit run --server.address 0.0.0.0 --server.headless true --server.enableCORS=false --server.enableWebsocketCompression=false dashboard.py"
+run = "python -m pip install -e . && streamlit run --server.address 0.0.0.0 --server.headless true --server.enableCORS=false --server.enableWebsocketCompression=false dashboard_app.py"
 
 [env]
 LILITH_EXECUTION_MODE = "simulation"
 EDITH_FORENSICS_PATH = "data/forensic_reports.jsonl"
+EDITH_ADAPTATION_STATE_PATH = "data/adaptation_state.json"
+EDITH_ADAPTATION_EVENTS_PATH = "data/adaptation_events.jsonl"
 
 [deployment]
-run = ["sh", "-c", "python -m pip install -e . && streamlit run --server.address 0.0.0.0 --server.port 3000 --server.headless true --server.enableCORS=false --server.enableWebsocketCompression=false dashboard.py"]
+run = ["sh", "-c", "python -m pip install -e . && streamlit run --server.address 0.0.0.0 --server.port 3000 --server.headless true --server.enableCORS=false --server.enableWebsocketCompression=false dashboard_app.py"]
 deploymentTarget = "autoscale"
