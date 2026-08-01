@@ -4,18 +4,24 @@ __pycache__/
 *$py.class
 .pytest_cache/
 .mypy_cache/
+.pyright/
 .ruff_cache/
+.hypothesis/
+.tox/
+.nox/
 .coverage
+.coverage.*
 coverage.xml
 htmlcov/
 
-# Virtual environments
+# Virtual environments and local Python selection
 .venv/
 venv/
 env/
 ENV/
+.python-version
 
-# Environment variables and secrets
+# Environment variables, credentials, and local secrets
 .env
 .env.*
 !.env.example
@@ -25,6 +31,7 @@ ENV/
 *.pfx
 secrets/
 credentials/
+.streamlit/secrets.toml
 
 # Jupyter
 .ipynb_checkpoints/
@@ -39,6 +46,8 @@ runtime/
 state/
 telemetry/
 artifacts/
+data/runtime_status.json
+data/*.jsonl
 
 # Trading and broker-local data
 *.csv
@@ -52,10 +61,11 @@ terminal_data/
 backtests/output/
 reports/generated/
 
-# Build and packaging
+# Build, packaging, and dependency tooling
 build/
 dist/
 *.egg-info/
+pip-wheel-metadata/
 
 # IDE and operating system
 .vscode/
