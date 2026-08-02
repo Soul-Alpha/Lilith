@@ -1,0 +1,10 @@
+﻿git : From https://github.com/Soul-Alpha/Lilith
+At line:1 char:1
++ git -C "C:\Users\Chaba\Documents\Lilith" pull origin main 2>&1 | Out- ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (From https://gi...ul-Alpha/Lilith 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ * branch            main       -> FETCH_HEAD
+Already up to date.
