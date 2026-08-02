@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -62,11 +63,11 @@ def test_research_runner_accepts_only_three_to_six_month_windows() -> None:
         JaxterResearchRunner().run(frame, lookback_months=2)
 
 
-def test_jaxter_package_has_no_edith_runtime_dependency() -> None:
+def test_jaxter_package_has_no_edith_or_broker_dependency() -> None:
     import lilith.jaxter.backtest as backtest
     import lilith.jaxter.engine as engine
     import lilith.jaxter.research as research
 
-    sources = " ".join((engine.__file__ or "", backtest.__file__ or "", research.__file__ or ""))
-    assert "mt5_demo" not in sources
-    assert "reconciled_runtime" not in sources
+    source = "\n".join(inspect.getsource(module) for module in (engine, backtest, research))
+    forbidden = ("mt5_demo", "reconciled_runtime", "MetaTrader5", "order_send", "dashboard")
+    assert not [name for name in forbidden if name in source]
