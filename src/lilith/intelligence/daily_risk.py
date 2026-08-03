@@ -8,22 +8,17 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
-
 _ZERO = Decimal("0")
 _ENTRY_CODES = {0}
 _EXIT_CODES = {1, 2, 3}
 
 
 def _decimal(value: Any) -> Decimal:
-    if value is None or value == "":
-        return _ZERO
-    return Decimal(str(value))
+    return _ZERO if value is None or value == "" else Decimal(str(value))
 
 
 def _optional_decimal(value: Any) -> Decimal | None:
-    if value is None or value == "":
-        return None
-    return Decimal(str(value))
+    return None if value is None or value == "" else Decimal(str(value))
 
 
 def _timestamp(value: Any) -> datetime:
@@ -46,6 +41,15 @@ def _json_default(value: Any) -> Any:
 def _canonical_hash(payload: Any) -> str:
     encoded = json.dumps(payload, default=_json_default, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return value
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -198,7 +202,6 @@ class DailyRiskLedgerEngine:
         closed = self._unique_closed(closed_trades)
         open_items = self._unique_open(open_positions)
         flows = self._unique_flows(cash_flows)
-
         closed = [item for item in closed if item.exit_timestamp.astimezone(timezone.utc).date() == trading_date]
         flows = [item for item in flows if item.timestamp.astimezone(timezone.utc).date() == trading_date]
 
@@ -210,12 +213,13 @@ class DailyRiskLedgerEngine:
         floating = sum((item.floating_pnl for item in open_items), _ZERO)
 
         reasons = sorted(set(str(reason) for reason in additional_reasons if str(reason)))
-        missing_cash = [item.position_id for item in open_items if item.projected_risk_cash is None]
-        missing_r = [item.position_id for item in open_items if item.projected_risk_r is None]
+        missing_cash = sorted(item.position_id for item in open_items if item.projected_risk_cash is None)
+        missing_r = sorted(item.position_id for item in open_items if item.projected_risk_r is None)
         if missing_cash:
-            reasons.append(f"missing_open_cash_risk:{','.join(sorted(missing_cash))}")
+            reasons.append(f"missing_open_cash_risk:{','.join(missing_cash)}")
         if missing_r:
-            reasons.append(f"missing_open_r_risk:{','.join(sorted(missing_r))}")
+            reasons.append(f"missing_open_r_risk:{','.join(missing_r)}")
+        reasons = sorted(set(reasons))
 
         open_cash = None if missing_cash else sum((item.projected_risk_cash or _ZERO for item in open_items), _ZERO)
         open_r = None if missing_r else sum((item.projected_risk_r or _ZERO for item in open_items), _ZERO)
@@ -238,7 +242,7 @@ class DailyRiskLedgerEngine:
             | {item.event_id for item in flows}
         )
         configuration_hash = _canonical_hash(asdict(policy))
-        identity_payload = {
+        report_id = _canonical_hash({
             "schema_version": self.schema_version,
             "trading_date": trading_date.isoformat(),
             "configuration_hash": configuration_hash,
@@ -248,8 +252,7 @@ class DailyRiskLedgerEngine:
             "open_r": open_r,
             "floating": floating,
             "reasons": reasons,
-        }
-        report_id = _canonical_hash(identity_payload)[:32]
+        })[:32]
 
         return DailyRiskSnapshot(
             report_id=report_id,
@@ -318,6 +321,10 @@ class DailyRiskLedgerPaths:
     data_dir: Path
 
     @property
+    def runtime_status(self) -> Path:
+        return self.data_dir / "runtime_status.json"
+
+    @property
     def forensic_reports(self) -> Path:
         return self.data_dir / "forensic_reports.jsonl"
 
@@ -361,17 +368,36 @@ class DailyRiskFileService:
             raise ValueError("generated_at must be timezone-aware")
         day = trading_date or generated.astimezone(timezone.utc).date()
 
+        status = _read_json(self.paths.runtime_status)
         forensic_rows = _read_jsonl(self.paths.forensic_reports)
         deal_rows = _read_jsonl(self.paths.deals)
         order_rows = _read_jsonl(self.paths.orders)
         snapshot_rows = _read_jsonl(self.paths.position_snapshots)
 
+        reasons: list[str] = []
+        if not self.paths.runtime_status.exists():
+            reasons.append("missing_source_file:runtime_status.json")
+        expected_open = int(status.get("open_positions", 0) or 0)
+        if expected_open > 0:
+            for path in (self.paths.deals, self.paths.orders, self.paths.position_snapshots):
+                if not path.exists():
+                    reasons.append(f"missing_source_file:{path.name}")
+
         closed = self._closed_trades(forensic_rows)
         open_positions, open_reasons = self._open_positions(deal_rows, order_rows, snapshot_rows)
+        reasons.extend(open_reasons)
+        if status and len(open_positions) != expected_open:
+            reasons.append(f"open_position_count_mismatch:runtime={expected_open},ledger={len(open_positions)}")
+
         unreconciled = self._unreconciled_exit_positions(day, forensic_rows, deal_rows)
-        reasons = list(open_reasons)
         if unreconciled:
             reasons.append(f"unreconciled_closed_positions:{','.join(unreconciled)}")
+
+        closed_today = [item for item in closed if item.exit_timestamp.date() == day]
+        forensic_pnl = sum((item.net_realised_pnl for item in closed_today), _ZERO)
+        runtime_pnl = _optional_decimal(status.get("daily_realised_pnl")) if status else None
+        if runtime_pnl is not None and abs(runtime_pnl - forensic_pnl) > Decimal("0.01"):
+            reasons.append(f"daily_pnl_reconciliation_mismatch:runtime={runtime_pnl},forensic={forensic_pnl}")
 
         snapshot = self.engine.build(
             trading_date=day,
@@ -402,18 +428,15 @@ class DailyRiskFileService:
         trades: list[ClosedRiskTrade] = []
         for row in rows:
             trade_id = str(row.get("trade_id") or row.get("position_id") or "")
-            exit_value = row.get("exit_timestamp")
-            if not trade_id or not exit_value:
+            if not trade_id or not row.get("exit_timestamp"):
                 continue
-            trades.append(
-                ClosedRiskTrade(
-                    trade_id=trade_id,
-                    exit_timestamp=_timestamp(exit_value),
-                    net_realised_pnl=_decimal(row.get("net_realised_pnl")),
-                    realised_r=_decimal(row.get("r_multiple")),
-                    source_record_id=f"forensic:{trade_id}",
-                )
-            )
+            trades.append(ClosedRiskTrade(
+                trade_id=trade_id,
+                exit_timestamp=_timestamp(row["exit_timestamp"]),
+                net_realised_pnl=_decimal(row.get("net_realised_pnl")),
+                realised_r=_decimal(row.get("r_multiple")),
+                source_record_id=f"forensic:{trade_id}",
+            ))
         return trades
 
     @staticmethod
@@ -442,8 +465,12 @@ class DailyRiskFileService:
         for position_id, rows in sorted(grouped.items()):
             entries = [row for row in rows if int(row.get("entry", -1)) in _ENTRY_CODES]
             exits = [row for row in rows if int(row.get("entry", -1)) in _EXIT_CODES]
-            if not entries or exits:
+            entry_volume = sum((_decimal(row.get("volume")) for row in entries), _ZERO)
+            exit_volume = sum((_decimal(row.get("volume")) for row in exits), _ZERO)
+            remaining_volume = max(entry_volume - exit_volume, _ZERO)
+            if not entries or remaining_volume <= Decimal("0.00000001"):
                 continue
+
             entry = sorted(entries, key=lambda row: _timestamp(row["timestamp"]))[0]
             order = DailyRiskFileService._matching_order(entry, orders)
             latest = latest_snapshots.get(position_id)
@@ -451,29 +478,31 @@ class DailyRiskFileService:
                 reasons.append(f"missing_open_position_snapshot:{position_id}")
             if order is None:
                 reasons.append(f"missing_open_position_order:{position_id}")
-            projected_cash = _optional_decimal(None if order is None else order.get("projected_risk_cash"))
+
+            original_risk = _optional_decimal(None if order is None else order.get("projected_risk_cash"))
+            remaining_fraction = remaining_volume / entry_volume if entry_volume > 0 else _ZERO
+            projected_cash = None if original_risk is None else original_risk * remaining_fraction
+            projected_r = None if original_risk is None else remaining_fraction
             source_ids = [f"deal:{entry.get('ticket', entry.get('order', position_id))}"]
             if order is not None:
                 source_ids.append(f"order:{order.get('order') or order.get('deal') or position_id}")
             if latest is not None:
                 source_ids.append(f"position_snapshot:{position_id}:{latest.get('timestamp')}")
-            positions.append(
-                OpenRiskPosition(
-                    position_id=position_id,
-                    snapshot_timestamp=None if latest is None else _timestamp(latest["timestamp"]),
-                    projected_risk_cash=projected_cash,
-                    projected_risk_r=Decimal("1") if projected_cash is not None else None,
-                    floating_pnl=_decimal(None if latest is None else latest.get("profit")),
-                    source_record_ids=tuple(source_ids),
-                )
-            )
+
+            positions.append(OpenRiskPosition(
+                position_id=position_id,
+                snapshot_timestamp=None if latest is None else _timestamp(latest["timestamp"]),
+                projected_risk_cash=projected_cash,
+                projected_risk_r=projected_r,
+                floating_pnl=_decimal(None if latest is None else latest.get("profit")),
+                source_record_ids=tuple(source_ids),
+            ))
         return positions, reasons
 
     @staticmethod
     def _matching_order(entry: dict[str, Any], orders: list[dict[str, Any]]) -> dict[str, Any] | None:
         candidates = [
-            row
-            for row in orders
+            row for row in orders
             if row.get("status") == "accepted"
             and (
                 str(row.get("deal")) == str(entry.get("ticket"))
@@ -493,12 +522,22 @@ class DailyRiskFileService:
             for row in forensic
             if row.get("trade_id") or row.get("position_id")
         }
-        exits = {
-            str(row.get("position_id"))
-            for row in deals
-            if row.get("position_id")
-            and int(row.get("entry", -1)) in _EXIT_CODES
-            and row.get("timestamp")
-            and _timestamp(row["timestamp"]).date() == trading_date
-        }
-        return sorted(exits - reconciled)
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in deals:
+            position_id = str(row.get("position_id") or "")
+            if position_id:
+                grouped.setdefault(position_id, []).append(row)
+
+        closed_today: set[str] = set()
+        for position_id, rows in grouped.items():
+            entries = [row for row in rows if int(row.get("entry", -1)) in _ENTRY_CODES]
+            exits = [row for row in rows if int(row.get("entry", -1)) in _EXIT_CODES]
+            entry_volume = sum((_decimal(row.get("volume")) for row in entries), _ZERO)
+            exit_volume = sum((_decimal(row.get("volume")) for row in exits), _ZERO)
+            has_exit_today = any(
+                row.get("timestamp") and _timestamp(row["timestamp"]).date() == trading_date
+                for row in exits
+            )
+            if entries and exit_volume >= entry_volume and has_exit_today:
+                closed_today.add(position_id)
+        return sorted(closed_today - reconciled)
