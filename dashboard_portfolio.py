@@ -89,14 +89,14 @@ def render_portfolio_dashboard() -> None:
     first[0].metric("Daily budget", _money(snapshot.get("daily_budget_cash"), currency))
     first[1].metric("Realised PnL", _money(snapshot.get("realised_net_pnl_cash"), currency))
     first[2].metric("Realised losses", _money(snapshot.get("realised_loss_cash"), currency))
-    first[3].metric("Open stop-risk", _money(snapshot.get("open_risk_cash"), currency))
+    first[3].metric("Open baseline risk", _money(snapshot.get("open_risk_cash"), currency))
     first[4].metric("Risk consumed", _money(snapshot.get("consumed_risk_cash"), currency))
     first[5].metric("Risk remaining", _money(snapshot.get("remaining_risk_cash"), currency))
 
     second = st.columns(6)
     second[0].metric("Budget", _r(snapshot.get("daily_budget_r")))
     second[1].metric("Losses", _r(snapshot.get("realised_loss_r")))
-    second[2].metric("Open heat", _r(snapshot.get("open_portfolio_heat_r")))
+    second[2].metric("Baseline heat", _r(snapshot.get("open_portfolio_heat_r")))
     second[3].metric("Consumed", _r(snapshot.get("consumed_risk_r")))
     second[4].metric("Remaining", _r(snapshot.get("remaining_risk_r")))
     second[5].metric("Floating PnL", _money(snapshot.get("open_floating_pnl_cash"), currency))
@@ -110,7 +110,8 @@ def render_portfolio_dashboard() -> None:
     st.caption(
         f"Trading date: {snapshot.get('trading_date', '—')} · "
         f"Policy: {snapshot.get('policy_version', '—')} · "
-        f"Report: {snapshot.get('report_id', '—')} · Advisory only"
+        f"Report: {snapshot.get('report_id', '—')} · Advisory only · "
+        "Open risk is based on accepted-order risk scaled for remaining volume; moved-stop repricing is a later sprint."
     )
 
     reasons = snapshot.get("evidence_reasons") or []
