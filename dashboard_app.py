@@ -5,6 +5,8 @@ import dashboard  # noqa: F401,E402
 
 from dashboard_adaptation import render_adaptation_dashboard
 from dashboard_jaxter import render_jaxter_dashboard
+from dashboard_portfolio import render_portfolio_dashboard
 
+render_portfolio_dashboard()
 render_adaptation_dashboard()
 render_jaxter_dashboard()
