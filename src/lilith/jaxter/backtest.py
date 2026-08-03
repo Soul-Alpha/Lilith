@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 import pandas as pd
 
 from .engine import _prepare
@@ -7,7 +9,7 @@ from .models import AMDStructureConfig, AMDStructureSignal, BacktestTrade, Direc
 
 
 class AMDStructureBacktester:
-    """Conservative bar backtester: stop wins ties when stop and target occur in one bar."""
+    """Conservative bar backtester with post-BOS entry eligibility."""
 
     def __init__(self, config: AMDStructureConfig | None = None) -> None:
         self.config = config or AMDStructureConfig()
@@ -16,12 +18,22 @@ class AMDStructureBacktester:
         frame = _prepare(candles, self.config.timezone)
         trades: list[BacktestTrade] = []
         for signal in signals:
-            start = pd.Timestamp(signal.bos_time)
-            if start.tzinfo is None:
-                start = start.tz_localize(self.config.timezone)
-            day = frame[(frame["timestamp"] >= start) & (frame["timestamp"].dt.date.astype(str) == signal.session_date)]
+            bos_time = pd.Timestamp(signal.bos_time)
+            if bos_time.tzinfo is None:
+                bos_time = bos_time.tz_localize(self.config.timezone)
+            session_day = pd.Timestamp(signal.session_date).date()
+            expiry = pd.Timestamp(
+                datetime.combine(session_day, self.config.distribution_end),
+                tz=self.config.timezone,
+            )
+            # BOS is close-confirmed. Entry cannot occur on the candle that created it.
+            eligible = frame[
+                (frame["timestamp"] > bos_time)
+                & (frame["timestamp"] <= expiry)
+                & (frame["timestamp"].dt.date == session_day)
+            ]
             fill_index: int | None = None
-            for idx, row in day.iterrows():
+            for idx, row in eligible.iterrows():
                 if float(row["low"]) <= signal.entry_price <= float(row["high"]):
                     fill_index = idx
                     break
@@ -29,8 +41,10 @@ class AMDStructureBacktester:
                 trades.append(BacktestTrade(signal, None, None, Outcome.NO_FILL, 0.0, 0, 0.0, 0.0))
                 continue
             after = frame.loc[fill_index:]
-            after = after[after["timestamp"].dt.date.astype(str) == signal.session_date]
+            after = after[(after["timestamp"] <= expiry) & (after["timestamp"].dt.date == session_day)]
             risk = abs(signal.entry_price - signal.stop_price)
+            if risk <= 0:
+                raise ValueError(f"Signal {signal.signal_id} has non-positive risk distance")
             mfe = mae = 0.0
             outcome = Outcome.EXPIRED
             exit_time: str | None = None
@@ -46,6 +60,7 @@ class AMDStructureBacktester:
                     mfe = max(mfe, (signal.entry_price - low) / risk)
                     mae = min(mae, (signal.entry_price - high) / risk)
                     stopped, targeted = high >= signal.stop_price, low <= signal.target_price
+                # Conservative ambiguity policy: stop wins same-bar ties.
                 if stopped:
                     outcome, realised, exit_time = Outcome.LOSS, -1.0, row["timestamp"].isoformat()
                     break
@@ -65,7 +80,7 @@ class AMDStructureBacktester:
         return trades
 
 
-def summarize(trades: list[BacktestTrade]) -> dict[str, float | int]:
+def summarize(trades: list[BacktestTrade]) -> dict[str, float | int | None]:
     resolved = [trade for trade in trades if trade.outcome in {Outcome.WIN, Outcome.LOSS}]
     wins = sum(trade.outcome is Outcome.WIN for trade in resolved)
     total_r = sum(trade.realised_r for trade in resolved)
@@ -75,7 +90,7 @@ def summarize(trades: list[BacktestTrade]) -> dict[str, float | int]:
         "resolved": len(resolved),
         "wins": wins,
         "losses": len(resolved) - wins,
-        "win_rate": round(wins / len(resolved), 4) if resolved else 0.0,
-        "expectancy_r": round(total_r / len(resolved), 4) if resolved else 0.0,
-        "net_r": round(total_r, 4),
+        "win_rate": round(wins / len(resolved), 4) if resolved else None,
+        "expectancy_r": round(total_r / len(resolved), 4) if resolved else None,
+        "net_r": round(total_r, 4) if resolved else None,
     }
