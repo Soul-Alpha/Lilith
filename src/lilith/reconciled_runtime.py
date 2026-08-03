@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from inspect import signature
+import os
 from typing import Any
 
+from .intelligence.daily_risk import DailyRiskFileService, DailyRiskPolicy
 from .mt5_demo import MT5DemoRuntime, append_jsonl, now
 from .mt5_reconciliation import MT5ForensicReconciler
 
@@ -26,6 +29,7 @@ class ReconciledMT5DemoRuntime(MT5DemoRuntime):
 
         self.position_snapshots_path = self.data_dir / "mt5_position_snapshots.jsonl"
         self.reconciler = MT5ForensicReconciler(self.data_dir)
+        self.daily_risk_service = DailyRiskFileService(self.data_dir)
 
     def _record_position_snapshots(self) -> int:
         mt5 = self._import_mt5()
@@ -47,6 +51,37 @@ class ReconciledMT5DemoRuntime(MT5DemoRuntime):
             })
         return len(owned)
 
+    def _refresh_daily_risk(self, status: dict[str, Any]) -> dict[str, Any]:
+        """Refresh advisory portfolio evidence without affecting execution flow."""
+        try:
+            policy = DailyRiskPolicy(
+                daily_budget_cash=Decimal(
+                    os.getenv("EDITH_PORTFOLIO_DAILY_BUDGET_CASH", str(self.max_daily_loss))
+                ),
+                daily_budget_r=Decimal(os.getenv("EDITH_PORTFOLIO_DAILY_BUDGET_R", "2.0")),
+                currency=str(status.get("currency") or os.getenv("EDITH_PORTFOLIO_CURRENCY", "USD")),
+            )
+            snapshot = self.daily_risk_service.refresh(policy)
+        except Exception as exc:  # Analytics must never become an execution dependency.
+            status.update({
+                "daily_risk_ledger_status": "error",
+                "daily_risk_ledger_error": repr(exc),
+                "daily_risk_advisory_only": True,
+            })
+            return status
+
+        status.update({
+            "daily_risk_ledger_status": "complete" if snapshot.evidence_complete else "awaiting_evidence",
+            "daily_risk_report_id": snapshot.report_id,
+            "daily_risk_consumed_cash": None if snapshot.consumed_risk_cash is None else float(snapshot.consumed_risk_cash),
+            "daily_risk_remaining_cash": None if snapshot.remaining_risk_cash is None else float(snapshot.remaining_risk_cash),
+            "daily_risk_consumed_r": None if snapshot.consumed_risk_r is None else float(snapshot.consumed_risk_r),
+            "daily_risk_remaining_r": None if snapshot.remaining_risk_r is None else float(snapshot.remaining_risk_r),
+            "daily_risk_open_heat_r": None if snapshot.open_portfolio_heat_r is None else float(snapshot.open_portfolio_heat_r),
+            "daily_risk_advisory_only": True,
+        })
+        return status
+
     def step(self) -> dict[str, Any]:
         # Capture broker changes every poll, not only when a new candle closes.
         self.validate_identity()
@@ -55,15 +90,14 @@ class ReconciledMT5DemoRuntime(MT5DemoRuntime):
         status = super().step()
         new_deals_after = self.record_deals()
         forensic_added = self.reconciler.reconcile()
+        status["new_deals"] = int(status.get("new_deals", 0)) + new_deals_before + new_deals_after
+        status["position_snapshots"] = snapshots
+        status["forensic_reports_added"] = forensic_added
+        status["reconciliation_at"] = datetime.now(timezone.utc).isoformat()
+        status = self._refresh_daily_risk(status)
         if new_deals_before or new_deals_after or snapshots or forensic_added:
-            # Calculate aggregated metrics and update status before publishing
-            status["new_deals"] = int(status.get("new_deals", 0)) + new_deals_before + new_deals_after
-            status["position_snapshots"] = snapshots
-            status["forensic_reports_added"] = forensic_added
-            status["reconciliation_at"] = datetime.now(timezone.utc).isoformat()
-            status["message"] = "Governed MT5 telemetry and forensic reconciliation received."
-            status = self.publish(**status)
-        return status
+            status["message"] = "Governed MT5 telemetry, forensic reconciliation, and daily risk evidence received."
+        return self.publish(**status)
 
 
 def run_from_environment() -> None:
