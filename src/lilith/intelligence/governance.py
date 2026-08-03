@@ -2,10 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from enum import StrEnum
+from enum import Enum
 from math import exp
 from statistics import fmean
 from typing import Iterable, Mapping
+
+try:
+    from enum import StrEnum
+except ImportError:  # Python < 3.11
+    class StrEnum(str, Enum):
+        pass
 
 
 class GovernanceDecision(StrEnum):

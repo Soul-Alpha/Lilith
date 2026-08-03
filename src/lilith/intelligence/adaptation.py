@@ -2,10 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from enum import StrEnum
+from enum import Enum
 from hashlib import sha256
 from json import dumps
 from typing import Mapping, Protocol
+
+try:
+    from enum import StrEnum
+except ImportError:  # Python < 3.11
+    class StrEnum(str, Enum):
+        pass
 
 from .governance import DataQualityReport, GovernanceDecision, LearningRecommendation
 

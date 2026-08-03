@@ -18,7 +18,22 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
-    tmp.replace(path)
+    try:
+        tmp.replace(path)
+    except PermissionError:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            tmp.replace(path)
+        except PermissionError:
+            path.write_text(tmp.read_text(encoding="utf-8"), encoding="utf-8")
+            if tmp.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
 
 
 def append_jsonl(path: Path, payload: dict[str, Any]) -> None:

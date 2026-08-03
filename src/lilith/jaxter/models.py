@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import time
-from enum import StrEnum
+from enum import Enum
 from typing import Any
+
+try:
+    from enum import StrEnum
+except ImportError:  # Python < 3.11
+    class StrEnum(str, Enum):
+        pass
 
 
 class Direction(StrEnum):

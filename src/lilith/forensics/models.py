@@ -3,9 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
-from enum import StrEnum
+from enum import Enum
 from types import MappingProxyType
 from typing import Mapping
+
+try:
+    from enum import StrEnum
+except ImportError:  # Python < 3.11
+    class StrEnum(str, Enum):
+        pass
 
 
 class Side(StrEnum):

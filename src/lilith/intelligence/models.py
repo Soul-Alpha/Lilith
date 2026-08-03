@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from enum import StrEnum
+from enum import Enum
 from hashlib import sha256
 from json import dumps
 from typing import Any, Mapping
 from uuid import uuid4
+
+try:
+    from enum import StrEnum
+except ImportError:  # Python < 3.11
+    class StrEnum(str, Enum):
+        pass
 
 
 SCHEMA_VERSION = "edith-eids-v1"
