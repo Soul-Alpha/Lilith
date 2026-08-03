@@ -58,7 +58,10 @@ class AdaptationTelemetryStore:
         if recorded_at.tzinfo is None:
             raise ValueError("recorded timestamp must be timezone-aware")
 
-        improvement = evidence.expectancy_r - evidence.champion_expectancy_r
+        # Normalize a derived telemetry value so equivalent decimal evidence has
+        # stable JSON, dashboard, digest, and test representation. This does not
+        # alter adaptation decisions or policy thresholds.
+        improvement = round(evidence.expectancy_r - evidence.champion_expectancy_r, 12)
         guardrails = {
             "data_quality": quality.passed and quality.score >= policy.minimum_quality_score,
             "governance_approval": recommendation.decision.value == "APPROVE_CANDIDATE",
