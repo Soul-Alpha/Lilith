@@ -48,6 +48,7 @@ telemetry/
 artifacts/
 data/runtime_status.json
 data/*.jsonl
+data/portfolio/
 
 # Trading and broker-local data
 *.csv
