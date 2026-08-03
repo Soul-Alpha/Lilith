@@ -47,8 +47,8 @@ class AMDStructureConfig:
     def __post_init__(self) -> None:
         if self.swing_window < 1:
             raise ValueError("swing_window must be positive")
-        if not 0 < self.risk_fraction <= 0.01:
-            raise ValueError("risk_fraction must be within (0, 0.01]")
+        if not 0.005 <= self.risk_fraction <= 0.01:
+            raise ValueError("risk_fraction must be within [0.005, 0.01]")
         if self.target_r < self.minimum_target_r:
             raise ValueError("target_r cannot be below minimum_target_r")
 
