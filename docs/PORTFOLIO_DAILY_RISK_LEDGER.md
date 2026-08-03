@@ -10,8 +10,12 @@ Consumed risk is defined as:
 
 ```text
 absolute realised trading losses today
-+ projected stop-risk on currently open Edith positions
++ accepted-order projected risk on currently open Edith positions
 ```
+
+Open risk is scaled for partial closures using remaining position volume. This first sprint uses
+the accepted-order risk baseline; repricing risk after stop movement is explicitly deferred to a
+later portfolio-risk sprint.
 
 Realised winning trades do not restore the daily risk budget. Deposits, withdrawals, and
 other external account adjustments are excluded from trading PnL and reported separately.
@@ -22,7 +26,7 @@ The ledger keeps cash and R accounting separate:
 - configured daily R budget
 - realised trading profit and loss
 - realised losing R
-- current open stop-risk
+- current open baseline risk
 - consumed risk
 - remaining risk
 - floating PnL
@@ -30,8 +34,9 @@ The ledger keeps cash and R accounting separate:
 
 ## Evidence behavior
 
-The ledger will not claim available risk when open-position risk cannot be reconciled.
-Instead it writes `null` for consumed and remaining risk and records explicit evidence reasons.
+The ledger does not label remaining risk as authoritative when reconciliation exceptions exist.
+When open-position risk itself cannot be reconstructed, it writes `null` for consumed and
+remaining risk and records explicit evidence reasons.
 
 Reconciliation checks include:
 
@@ -80,12 +85,12 @@ Phase 2.
 - daily budget
 - realised PnL
 - realised losses
-- open stop-risk
+- open baseline risk
 - risk consumed
 - risk remaining
-- open portfolio heat
+- baseline portfolio heat
 - floating PnL
 - closed trades, open positions, and current loss streak
 - reconciliation exceptions and source lineage
 
-Missing or conflicting evidence is shown as `Awaiting`, never as a false zero.
+Missing position-risk evidence is shown as `Awaiting`, never as a false zero.
