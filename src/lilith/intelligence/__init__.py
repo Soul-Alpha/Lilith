@@ -11,6 +11,16 @@ from .adaptation import (
     LiveAdaptationEvidence,
 )
 from .adaptation_telemetry import AdaptationTelemetryPaths, AdaptationTelemetryStore
+from .daily_risk import (
+    CashFlowEvent,
+    ClosedRiskTrade,
+    DailyRiskFileService,
+    DailyRiskLedgerEngine,
+    DailyRiskLedgerPaths,
+    DailyRiskPolicy,
+    DailyRiskSnapshot,
+    OpenRiskPosition,
+)
 from .engines import Candle, LiquidityIntelligenceEngine, MarketStateEngine, SessionIntelligenceEngine, TrendStateEngine
 from .execution import ExecutionIntelligenceEngine, ExecutionQualityReport
 from .governance import (
@@ -63,7 +73,14 @@ __all__ = [
     "BackfillCheckpointStore",
     "BayesianProbabilityEngine",
     "Candle",
+    "CashFlowEvent",
+    "ClosedRiskTrade",
     "ConcentrationReport",
+    "DailyRiskFileService",
+    "DailyRiskLedgerEngine",
+    "DailyRiskLedgerPaths",
+    "DailyRiskPolicy",
+    "DailyRiskSnapshot",
     "DataQualityGate",
     "DataQualityPolicy",
     "DataQualityReport",
@@ -92,6 +109,7 @@ __all__ = [
     "ObservationActivationService",
     "ObservationStore",
     "OlympusCompatibilityAdapter",
+    "OpenRiskPosition",
     "Outcome",
     "PatternDNA",
     "PatternDNAEngine",
