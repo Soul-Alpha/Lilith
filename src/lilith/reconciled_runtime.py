@@ -12,6 +12,49 @@ from .mt5_reconciliation import MT5ForensicReconciler
 from .mt5_terminal import initialize_terminal, terminal_identity
 
 
+class OwnershipAwareRuntimeLock:
+    """Prevent a runtime from releasing a lock it never acquired.
+
+    The underlying lock remains fail-closed. This wrapper records ownership,
+    adds owner diagnostics, and never removes or overrides an uncertain lock.
+    """
+
+    def __init__(self, delegate: Any) -> None:
+        self._delegate = delegate
+        self.acquired = False
+
+    @property
+    def path(self) -> Any:
+        return self._delegate.path
+
+    def _owner_details(self) -> str:
+        try:
+            value = self.path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            return "owner metadata unavailable"
+        return value or "owner metadata empty"
+
+    def acquire(self) -> None:
+        try:
+            self._delegate.acquire()
+        except RuntimeError as exc:
+            owner = self._owner_details()
+            raise RuntimeError(
+                f"{exc}. Lock owner: {owner}. Stop the previous Edith notebook "
+                "kernel/process before starting another runtime. Only delete the "
+                "lock after confirming that its PID is no longer active."
+            ) from exc
+        self.acquired = True
+
+    def release(self) -> None:
+        if not self.acquired:
+            return
+        try:
+            self._delegate.release()
+        finally:
+            self.acquired = False
+
+
 class ReconciledMT5DemoRuntime(MT5DemoRuntime):
     """Adds analytics-only lifecycle capture, reconciliation, and terminal binding."""
 
@@ -26,6 +69,10 @@ class ReconciledMT5DemoRuntime(MT5DemoRuntime):
         if "mt5" not in parameters and mt5 is not None:
             self.mt5 = mt5
 
+        # MT5DemoRuntime.run() always calls release() in its finalizer. Track
+        # ownership so a process rejected during acquire() cannot delete a lock
+        # owned by another active runtime. This also makes repeated release safe.
+        self.lock = OwnershipAwareRuntimeLock(self.lock)
         self.position_snapshots_path = self.data_dir / "mt5_position_snapshots.jsonl"
         self.reconciler = MT5ForensicReconciler(self.data_dir)
         self.daily_risk_service = DailyRiskFileService(self.data_dir)
