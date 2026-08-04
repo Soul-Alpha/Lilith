@@ -1,0 +1,71 @@
+name: Operational Smoke
+
+on:
+  push:
+    branches:
+      - main
+      - "fix/**"
+      - "feature/**"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dashboard-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      LILITH_EXECUTION_MODE: simulation
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Start unified Streamlit dashboard
+        shell: bash
+        run: |
+          python -m streamlit run dashboard_app.py --server.headless true --server.port 8765 > streamlit.log 2>&1 &
+          echo $! > streamlit.pid
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8765/_stcore/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat streamlit.log
+          exit 1
+      - name: Stop dashboard
+        if: always()
+        run: kill "$(cat streamlit.pid)" 2>/dev/null || true
+
+  windows-contract:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      LILITH_EXECUTION_MODE: simulation
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Compile Windows diagnostic and MT5 runtime
+        run: python -m compileall -q src scripts/diagnose_mt5_connection.py dashboard_app.py
+      - name: Run terminal binding contract tests
+        run: python -m pytest tests/test_mt5_terminal.py
+      - name: Verify diagnostic never imports order submission code directly
+        shell: pwsh
+        run: |
+          $source = Get-Content scripts/diagnose_mt5_connection.py -Raw
+          if ($source.Contains('order_send(') -or $source.Contains('order_check(')) {
+            throw 'Read-only diagnostic contains order submission calls.'
+          }
