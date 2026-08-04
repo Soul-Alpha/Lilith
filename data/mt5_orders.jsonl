@@ -255,3 +255,4 @@
 {"comment":"Spread 240.0 points exceeds limit 80.0.","session_id":"5136182a-fb3a-4c03-be5c-a54348928826","side":"SELL","status":"risk_rejected","symbol":"XAUUSDm","timestamp":"2026-08-03T13:54:58.907662+00:00"}
 {"comment":"Spread 240.0 points exceeds limit 80.0.","session_id":"0c97e993-a543-4550-af76-cb454df7ef64","side":"SELL","status":"risk_rejected","symbol":"XAUUSDm","timestamp":"2026-08-03T17:34:50.765054+00:00"}
 {"comment":"Spread 240.0 points exceeds limit 80.0.","session_id":"a3d6d309-03f4-46fc-979b-2cf4fc6848ea","side":"SELL","status":"risk_rejected","symbol":"XAUUSDm","timestamp":"2026-08-03T17:36:14.298171+00:00"}
+{"comment":"Spread 240.0 points exceeds limit 80.0.","session_id":"6d2783cf-d412-43f2-9ae7-0f437537fc9a","side":"BUY","status":"risk_rejected","symbol":"XAUUSDm","timestamp":"2026-08-04T04:42:48.966693+00:00"}
