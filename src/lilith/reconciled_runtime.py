@@ -9,14 +9,13 @@ from typing import Any
 from .intelligence.daily_risk import DailyRiskFileService, DailyRiskPolicy
 from .mt5_demo import MT5DemoRuntime, append_jsonl, now
 from .mt5_reconciliation import MT5ForensicReconciler
+from .mt5_terminal import initialize_terminal, terminal_identity
 
 
 class ReconciledMT5DemoRuntime(MT5DemoRuntime):
-    """Adds analytics-only lifecycle capture and reconciliation to Edith execution."""
+    """Adds analytics-only lifecycle capture, reconciliation, and terminal binding."""
 
     def __init__(self, mt5: Any | None = None, data_dir: str = "data") -> None:
-        # Support both the current injectable MT5 runtime constructor and older
-        # local editable installs whose base constructor only accepts data_dir.
         parameters = signature(MT5DemoRuntime.__init__).parameters
         kwargs: dict[str, Any] = {}
         if "data_dir" in parameters:
@@ -30,6 +29,50 @@ class ReconciledMT5DemoRuntime(MT5DemoRuntime):
         self.position_snapshots_path = self.data_dir / "mt5_position_snapshots.jsonl"
         self.reconciler = MT5ForensicReconciler(self.data_dir)
         self.daily_risk_service = DailyRiskFileService(self.data_dir)
+        self.terminal_path = None
+
+    def connect(self) -> None:
+        mt5 = self._import_mt5()
+        self.lock.acquire()
+        try:
+            self.terminal_path = initialize_terminal(mt5)
+            if not mt5.login(self.login, password=self.password, server=self.server):
+                raise RuntimeError(f"MT5 login failed: {mt5.last_error()}")
+            account, terminal = self.validate_identity()
+            if not mt5.symbol_select(self.symbol, True):
+                raise RuntimeError(f"Unable to select {self.symbol}: {mt5.last_error()}")
+            self.initial_equity = float(account.equity)
+            self.publish(
+                connection="Online",
+                broker_connection="Connected",
+                runtime="running",
+                mode="mt5-demo",
+                session_id=self.session_id,
+                started_at=now(),
+                symbol=self.symbol,
+                timeframe=self.timeframe,
+                account_login=int(account.login),
+                account_server=str(account.server),
+                account_trade_mode="demo",
+                account_balance=float(account.balance),
+                account_equity=float(account.equity),
+                account_profit=float(account.profit),
+                currency=str(account.currency),
+                iteration=0,
+                signals_seen=0,
+                orders_sent=0,
+                open_positions=0,
+                pending_orders=0,
+                last_signal="HOLD",
+                message="Connected to governed MT5 demo account.",
+                **terminal_identity(terminal, self.terminal_path),
+            )
+        except Exception:
+            try:
+                mt5.shutdown()
+            finally:
+                self.lock.release()
+            raise
 
     def _record_position_snapshots(self) -> int:
         mt5 = self._import_mt5()
@@ -52,17 +95,14 @@ class ReconciledMT5DemoRuntime(MT5DemoRuntime):
         return len(owned)
 
     def _refresh_daily_risk(self, status: dict[str, Any]) -> dict[str, Any]:
-        """Refresh advisory portfolio evidence without affecting execution flow."""
         try:
             policy = DailyRiskPolicy(
-                daily_budget_cash=Decimal(
-                    os.getenv("EDITH_PORTFOLIO_DAILY_BUDGET_CASH", str(self.max_daily_loss))
-                ),
+                daily_budget_cash=Decimal(os.getenv("EDITH_PORTFOLIO_DAILY_BUDGET_CASH", str(self.max_daily_loss))),
                 daily_budget_r=Decimal(os.getenv("EDITH_PORTFOLIO_DAILY_BUDGET_R", "2.0")),
                 currency=str(status.get("currency") or os.getenv("EDITH_PORTFOLIO_CURRENCY", "USD")),
             )
             snapshot = self.daily_risk_service.refresh(policy)
-        except Exception as exc:  # Analytics must never become an execution dependency.
+        except Exception as exc:
             status.update({
                 "daily_risk_ledger_status": "error",
                 "daily_risk_ledger_error": repr(exc),
@@ -83,7 +123,6 @@ class ReconciledMT5DemoRuntime(MT5DemoRuntime):
         return status
 
     def step(self) -> dict[str, Any]:
-        # Capture broker changes every poll, not only when a new candle closes.
         self.validate_identity()
         new_deals_before = self.record_deals()
         snapshots = self._record_position_snapshots()
