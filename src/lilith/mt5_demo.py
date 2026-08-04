@@ -58,6 +58,12 @@ class MarketSnapshot:
     close: float
 
 
+class SpreadGateRejected(RuntimeError):
+    def __init__(self, metadata: dict[str, Any]) -> None:
+        self.metadata = metadata
+        super().__init__(str(metadata.get("rejection_reason", "spread_gate_rejected")))
+
+
 class RuntimeLock:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -110,6 +116,11 @@ class MT5DemoRuntime:
         self.max_drawdown_pct = max(0.01, float(os.getenv("EDITH_MT5_MAX_DRAWDOWN_PCT", "10.0")))
         self.min_margin_level = max(1.0, float(os.getenv("EDITH_MT5_MIN_MARGIN_LEVEL", "300")))
         self.max_spread_points = max(1.0, float(os.getenv("EDITH_MT5_MAX_SPREAD_POINTS", "80")))
+        self.high_grade_score = max(0.0, float(os.getenv("EDITH_MT5_HIGH_GRADE_SCORE", "85")))
+        self.high_grade_max_spread_points = max(1.0, float(os.getenv("EDITH_MT5_HIGH_GRADE_MAX_SPREAD_POINTS", "260")))
+        self.high_grade_max_spread_atr_fraction = max(0.0, float(os.getenv("EDITH_MT5_HIGH_GRADE_MAX_SPREAD_ATR_FRACTION", "0.07")))
+        self.high_grade_rearm_score = max(0.0, float(os.getenv("EDITH_MT5_HIGH_GRADE_REARM_SCORE", "70")))
+        self.high_grade_one_per_regime = os.getenv("EDITH_MT5_HIGH_GRADE_ONE_PER_REGIME", "YES").strip().upper() not in {"0", "NO", "FALSE", "OFF"}
 
         self.data_dir = Path(data_dir)
         self.status_path = self.data_dir / "runtime_status.json"
@@ -128,6 +139,10 @@ class MT5DemoRuntime:
         self.last_candle_time: int | None = None
         self.last_signal_key: str | None = None
         self.known_deals: set[int] = set()
+        self.high_grade_regime_direction: str | None = None
+        self.high_grade_override_consumed = False
+        self.high_grade_last_score: float | None = None
+        self.high_grade_updated_at: str | None = None
         self._load_state()
 
     def _load_state(self) -> None:
@@ -140,12 +155,23 @@ class MT5DemoRuntime:
         self.last_candle_time = state.get("last_candle_time")
         self.last_signal_key = state.get("last_signal_key")
         self.known_deals = {int(value) for value in state.get("known_deals", [])}
+        direction = state.get("high_grade_regime_direction")
+        self.high_grade_regime_direction = direction if direction in {"BUY", "SELL"} else None
+        self.high_grade_override_consumed = bool(state.get("high_grade_override_consumed", False))
+        last_score = state.get("high_grade_last_score")
+        self.high_grade_last_score = None if last_score is None else float(last_score)
+        updated_at = state.get("high_grade_updated_at")
+        self.high_grade_updated_at = str(updated_at) if updated_at else None
 
     def _save_state(self) -> None:
         write_json(self.state_path, {
             "last_candle_time": self.last_candle_time,
             "last_signal_key": self.last_signal_key,
             "known_deals": sorted(self.known_deals)[-5000:],
+            "high_grade_regime_direction": self.high_grade_regime_direction,
+            "high_grade_override_consumed": self.high_grade_override_consumed,
+            "high_grade_last_score": self.high_grade_last_score,
+            "high_grade_updated_at": self.high_grade_updated_at,
             "updated_at": now(),
         })
 
@@ -297,64 +323,149 @@ class MT5DemoRuntime:
             raise RuntimeError("Unable to calculate projected cash risk.")
         return abs(entry - stop) / tick_size * tick_value * volume
 
-    def build_request(self, side: str, atr: float) -> tuple[dict[str, Any], float]:
+    def _refresh_high_grade_regime(self, side: str, signal_score: float) -> None:
+        if side not in {"BUY", "SELL"}:
+            return
+        if self.high_grade_regime_direction != side:
+            self.high_grade_regime_direction = side
+            self.high_grade_override_consumed = False
+        elif signal_score < self.high_grade_rearm_score:
+            self.high_grade_override_consumed = False
+        self.high_grade_last_score = signal_score
+        self.high_grade_updated_at = now()
+
+    def _consume_high_grade_override(self, side: str, signal_score: float) -> None:
+        self.high_grade_regime_direction = side
+        self.high_grade_override_consumed = True
+        self.high_grade_last_score = signal_score
+        self.high_grade_updated_at = now()
+
+    def _spread_gate(self, *, side: str, atr: float, signal_score: float, spread_price: float,
+                     point: float, digits: int) -> dict[str, Any]:
+        spread_points = spread_price / point if point > 0 else float("inf")
+        high_grade_atr_limit_points = atr * self.high_grade_max_spread_atr_fraction / point if point > 0 and atr > 0 else None
+        extended_limit = min(self.high_grade_max_spread_points, high_grade_atr_limit_points) if high_grade_atr_limit_points is not None else None
+        effective_limit = max(self.max_spread_points, extended_limit) if extended_limit is not None else self.max_spread_points
+        self._refresh_high_grade_regime(side, signal_score)
+        override_armed = not self.high_grade_one_per_regime or not self.high_grade_override_consumed
+        metadata = {"spread_price": round(spread_price, digits), "spread_points": spread_points,
+                    "point": point, "digits": digits, "atr": atr,
+                    "spread_atr_fraction": spread_price / atr if atr > 0 else None,
+                    "normal_spread_limit_points": self.max_spread_points,
+                    "high_grade_score_threshold": self.high_grade_score,
+                    "high_grade_hard_limit_points": self.high_grade_max_spread_points,
+                    "high_grade_atr_limit_points": high_grade_atr_limit_points,
+                    "effective_spread_limit_points": effective_limit,
+                    "signal_score": signal_score, "signal_direction": side,
+                    "override_armed": override_armed, "high_grade_override": False,
+                    "spread_gate_mode": "rejected", "spread_gate_passed": False,
+                    "rejection_reason": None,
+                    "high_grade_regime_direction": self.high_grade_regime_direction,
+                    "high_grade_override_consumed": self.high_grade_override_consumed}
+        if point <= 0:
+            metadata["rejection_reason"] = "invalid_symbol_point"
+            raise SpreadGateRejected(metadata)
+        if atr <= 0:
+            metadata["rejection_reason"] = "invalid_atr"
+            raise SpreadGateRejected(metadata)
+        if spread_points <= self.max_spread_points:
+            metadata.update({"spread_gate_mode": "normal", "spread_gate_passed": True})
+            return metadata
+        if signal_score < self.high_grade_score:
+            metadata["rejection_reason"] = "spread_above_normal_signal_not_high_grade"
+            raise SpreadGateRejected(metadata)
+        if spread_points > self.high_grade_max_spread_points:
+            metadata["rejection_reason"] = "spread_above_high_grade_hard_cap"
+            raise SpreadGateRejected(metadata)
+        if high_grade_atr_limit_points is None or spread_points > high_grade_atr_limit_points:
+            metadata["rejection_reason"] = "spread_above_high_grade_atr_cap"
+            raise SpreadGateRejected(metadata)
+        if not override_armed:
+            metadata["rejection_reason"] = "high_grade_override_consumed"
+            raise SpreadGateRejected(metadata)
+        metadata.update({"high_grade_override": True, "spread_gate_mode": "high_grade_override",
+                         "spread_gate_passed": True})
+        return metadata
+
+    def build_request(self, side: str, atr: float, *, signal_score: float,
+                      signal_key: str) -> tuple[dict[str, Any], float, dict[str, Any]]:
         mt5 = self._import_mt5()
         account, _ = self.validate_identity()
-        owned_positions, owned_orders = self.owned_exposure()
-        if len(owned_positions) >= self.max_positions or owned_orders:
-            raise RuntimeError("Edith exposure limit reached or pending order exists.")
         info = mt5.symbol_info(self.symbol)
         tick = mt5.symbol_info_tick(self.symbol)
         if info is None or tick is None:
             raise RuntimeError(f"Symbol information unavailable for {self.symbol}")
         point = float(info.point)
-        spread_points = (float(tick.ask) - float(tick.bid)) / point if point > 0 else float("inf")
-        if spread_points > self.max_spread_points:
-            raise RuntimeError(f"Spread {spread_points:.1f} points exceeds limit {self.max_spread_points:.1f}.")
-        buy = side == "BUY"
-        price = float(tick.ask if buy else tick.bid)
         digits = int(info.digits)
-        min_distance = max(float(getattr(info, "trade_stops_level", 0)), float(getattr(info, "trade_freeze_level", 0))) * point
-        stop_distance = max(atr * self.stop_atr, min_distance + point)
-        target_distance = max(atr * self.target_atr, min_distance + point)
-        stop = price - stop_distance if buy else price + stop_distance
-        target = price + target_distance if buy else price - target_distance
-        volume = self._volume(info)
-        risk_cash = self._risk_cash(side, volume, price, stop, info)
-        equity_limit = float(account.equity) * self.max_risk_pct / 100.0
-        if risk_cash > min(self.max_risk_cash, equity_limit):
-            raise RuntimeError(f"Projected risk {risk_cash:.2f} exceeds cash/equity limit.")
-        daily_pnl = self.daily_realised_pnl()
-        if daily_pnl <= -self.max_daily_loss:
-            raise RuntimeError("Daily loss limit reached.")
-        drawdown_pct = max(0.0, (self.initial_equity - float(account.equity)) / self.initial_equity * 100.0) if self.initial_equity else 0.0
-        if drawdown_pct >= self.max_drawdown_pct:
-            raise RuntimeError("Runtime drawdown limit reached.")
-        margin_level = float(getattr(account, "margin_level", 0.0) or 0.0)
-        if float(getattr(account, "margin", 0.0)) > 0 and margin_level < self.min_margin_level:
-            raise RuntimeError("Margin level below configured minimum.")
-        request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": self.symbol, "volume": volume,
-                   "type": mt5.ORDER_TYPE_BUY if buy else mt5.ORDER_TYPE_SELL,
-                   "price": round(price, digits), "sl": round(stop, digits), "tp": round(target, digits),
-                   "deviation": self.deviation, "magic": self.magic, "comment": "Edith MT5 demo",
-                   "type_time": mt5.ORDER_TIME_GTC, "type_filling": self._filling_mode(info)}
-        return request, risk_cash
+        spread_price = float(tick.ask) - float(tick.bid)
+        spread_gate = self._spread_gate(side=side, atr=atr, signal_score=signal_score,
+                                        spread_price=spread_price, point=point, digits=digits)
+        spread_gate["signal_key"] = signal_key
+        try:
+            owned_positions, owned_orders = self.owned_exposure()
+            if len(owned_positions) >= self.max_positions or owned_orders:
+                raise RuntimeError("Edith exposure limit reached or pending order exists.")
+            buy = side == "BUY"
+            price = float(tick.ask if buy else tick.bid)
+            min_distance = max(float(getattr(info, "trade_stops_level", 0)), float(getattr(info, "trade_freeze_level", 0))) * point
+            stop_distance = max(atr * self.stop_atr, min_distance + point)
+            target_distance = max(atr * self.target_atr, min_distance + point)
+            stop = price - stop_distance if buy else price + stop_distance
+            target = price + target_distance if buy else price - target_distance
+            volume = self._volume(info)
+            risk_cash = self._risk_cash(side, volume, price, stop, info)
+            equity_limit = float(account.equity) * self.max_risk_pct / 100.0
+            if risk_cash > min(self.max_risk_cash, equity_limit):
+                raise RuntimeError(f"Projected risk {risk_cash:.2f} exceeds cash/equity limit.")
+            daily_pnl = self.daily_realised_pnl()
+            if daily_pnl <= -self.max_daily_loss:
+                raise RuntimeError("Daily loss limit reached.")
+            drawdown_pct = max(0.0, (self.initial_equity - float(account.equity)) / self.initial_equity * 100.0) if self.initial_equity else 0.0
+            if drawdown_pct >= self.max_drawdown_pct:
+                raise RuntimeError("Runtime drawdown limit reached.")
+            margin_level = float(getattr(account, "margin_level", 0.0) or 0.0)
+            if float(getattr(account, "margin", 0.0)) > 0 and margin_level < self.min_margin_level:
+                raise RuntimeError("Margin level below configured minimum.")
+            request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": self.symbol, "volume": volume,
+                       "type": mt5.ORDER_TYPE_BUY if buy else mt5.ORDER_TYPE_SELL,
+                       "price": round(price, digits), "sl": round(stop, digits), "tp": round(target, digits),
+                       "deviation": self.deviation, "magic": self.magic, "comment": "Edith MT5 demo",
+                       "type_time": mt5.ORDER_TIME_GTC, "type_filling": self._filling_mode(info)}
+        except RuntimeError as exc:
+            setattr(exc, "spread_gate", spread_gate)
+            raise
+        return request, risk_cash, spread_gate
 
-    def send_order(self, side: str, atr: float) -> dict[str, Any]:
+    def send_order(self, side: str, atr: float, *, signal_score: float, signal_key: str) -> dict[str, Any]:
         mt5 = self._import_mt5()
         try:
-            request, risk_cash = self.build_request(side, atr)
+            request, risk_cash, spread_gate = self.build_request(side, atr, signal_score=signal_score,
+                                                                 signal_key=signal_key)
+        except SpreadGateRejected as exc:
+            event = {"timestamp": now(), "session_id": self.session_id, "status": "risk_rejected",
+                     "rejection_category": "market_quality", "rejection_reason": exc.metadata.get("rejection_reason"),
+                     "side": side, "symbol": self.symbol, "signal_score": signal_score,
+                     "signal_key": signal_key, "comment": exc.metadata.get("rejection_reason")}
+            event.update(exc.metadata)
+            append_jsonl(self.orders_path, event)
+            return event
         except RuntimeError as exc:
             event = {"timestamp": now(), "session_id": self.session_id, "status": "risk_rejected",
-                     "side": side, "symbol": self.symbol, "comment": str(exc)}
+                     "side": side, "symbol": self.symbol, "signal_score": signal_score,
+                     "signal_key": signal_key, "comment": str(exc)}
+            spread_gate = getattr(exc, "spread_gate", None)
+            if isinstance(spread_gate, dict):
+                event.update(spread_gate)
             append_jsonl(self.orders_path, event)
             return event
         check = mt5.order_check(request)
         if check is None or int(check.retcode) != 0:
             event = {"timestamp": now(), "session_id": self.session_id, "status": "rejected_check",
                      "side": side, "symbol": self.symbol, "request": request,
+                     "signal_score": signal_score, "signal_key": signal_key,
                      "retcode": None if check is None else int(check.retcode),
                      "comment": None if check is None else str(check.comment), "last_error": mt5.last_error()}
+            event.update(spread_gate)
             append_jsonl(self.orders_path, event)
             return event
         result = mt5.order_send(request)
@@ -363,12 +474,17 @@ class MT5DemoRuntime:
                  "status": "accepted" if result is not None and int(result.retcode) in ok_codes else "rejected_send",
                  "side": side, "symbol": self.symbol, "volume": request["volume"], "price": request["price"],
                  "sl": request["sl"], "tp": request["tp"], "projected_risk_cash": round(risk_cash, 2),
+                 "signal_score": signal_score, "signal_key": signal_key,
                  "order": None if result is None else int(result.order), "deal": None if result is None else int(result.deal),
                  "retcode": None if result is None else int(result.retcode),
                  "comment": None if result is None else str(result.comment), "last_error": mt5.last_error()}
+        event.update(spread_gate)
         append_jsonl(self.orders_path, event)
         if event["status"] == "accepted":
             self.orders_sent += 1
+            if spread_gate.get("high_grade_override"):
+                self._consume_high_grade_override(side, signal_score)
+                self._save_state()
         return event
 
     def record_deals(self) -> int:
@@ -404,7 +520,8 @@ class MT5DemoRuntime:
         self.signals_seen += 1
         order = None
         if signal["decision"] == "ENTER_MT5_DEMO":
-            order = self.send_order(signal["signal"], market.atr)
+            order = self.send_order(signal["signal"], market.atr,
+                                    signal_score=float(signal["score"]), signal_key=str(signal["signal_key"]))
             if order.get("status") == "accepted":
                 self.last_signal_key = signal["signal_key"]
         self._save_state()
@@ -419,6 +536,17 @@ class MT5DemoRuntime:
             signals_seen=self.signals_seen, orders_sent=self.orders_sent, open_positions=len(positions),
             pending_orders=len(pending), last_signal=signal["signal"], last_score=signal["score"],
             last_candle_time=market.candle_time, last_order_status=None if order is None else order["status"],
+            last_spread_points=None if order is None else order.get("spread_points"),
+            last_normal_spread_limit_points=None if order is None else order.get("normal_spread_limit_points"),
+            last_effective_spread_limit_points=None if order is None else order.get("effective_spread_limit_points"),
+            last_spread_atr_fraction=None if order is None else order.get("spread_atr_fraction"),
+            last_spread_gate_mode=None if order is None else order.get("spread_gate_mode"),
+            last_high_grade_override=None if order is None else order.get("high_grade_override"),
+            last_rejection_category=None if order is None else order.get("rejection_category"),
+            last_rejection_reason=None if order is None else order.get("rejection_reason"),
+            high_grade_regime_direction=self.high_grade_regime_direction,
+            high_grade_override_consumed=self.high_grade_override_consumed,
+            high_grade_last_score=self.high_grade_last_score,
             daily_realised_pnl=round(self.daily_realised_pnl(), 2), new_deals=new_deals,
             message="Governed MT5 demo telemetry received.")
 
@@ -429,7 +557,14 @@ class MT5DemoRuntime:
             while self.max_iterations <= 0 or self.iteration < self.max_iterations:
                 status = self.step()
                 print(f"[{status['heartbeat_at']}] iteration={self.iteration} signal={status.get('last_signal', '—')} orders={self.orders_sent} positions={status.get('open_positions', 0)}")
-                time.sleep(self.poll_seconds)
+                # Pulse the heartbeat every 10 s so the dashboard never goes stale during the poll gap.
+                elapsed = 0
+                while elapsed < self.poll_seconds:
+                    chunk = min(10, self.poll_seconds - elapsed)
+                    time.sleep(chunk)
+                    elapsed += chunk
+                    if elapsed < self.poll_seconds:
+                        self.publish(message=status.get("message", "Awaiting next completed candle."))
         except KeyboardInterrupt:
             self.publish(connection="Offline", broker_connection="Disconnected", runtime="stopped", mode="mt5-demo",
                          session_id=self.session_id, stopped_at=now(), message="MT5 demo loop stopped by operator.")
@@ -441,7 +576,10 @@ class MT5DemoRuntime:
         finally:
             if self.mt5 is not None:
                 try:
-                    self.mt5.shutdown()
+                    mt5_instance: Any = self.mt5
+                    shutdown = getattr(mt5_instance, "shutdown", None)
+                    if callable(shutdown):
+                        shutdown()
                 finally:
                     self.lock.release()
 

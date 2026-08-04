@@ -126,6 +126,31 @@ def runtime_panel() -> None:
         f"Last order: {status.get('last_order_status', '—')}"
     )
 
+    gate_mode = str(status.get("last_spread_gate_mode", "?"))
+    gate_label = {"normal": "Normal", "high_grade_override": "High-grade override",
+                  "rejected": "Rejected"}.get(gate_mode, gate_mode)
+    spread_atr = status.get("last_spread_atr_fraction")
+    spread_atr_label = "?" if spread_atr is None else f"{float(spread_atr) * 100:.2f}%"
+    m, n, o, p, q, r = st.columns(6)
+    m.metric("Signal score", "?" if status.get("last_score") is None else f"{float(status.get('last_score')):.2f}")
+    n.metric("Measured spread", "?" if status.get("last_spread_points") is None else f"{float(status.get('last_spread_points')):.1f} pts")
+    o.metric("Normal spread limit", "?" if status.get("last_normal_spread_limit_points") is None else f"{float(status.get('last_normal_spread_limit_points')):.1f} pts")
+    p.metric("Effective spread limit", "?" if status.get("last_effective_spread_limit_points") is None else f"{float(status.get('last_effective_spread_limit_points')):.1f} pts")
+    q.metric("Spread as ATR", spread_atr_label)
+    r.metric("Spread gate", gate_label)
+    s, t, u = st.columns(3)
+    s.metric("High-grade override used", "Yes" if status.get("last_high_grade_override") else "No")
+    t.metric("Override state", "Consumed" if status.get("high_grade_override_consumed") else "Armed")
+    u.metric("Regime", str(status.get("high_grade_regime_direction", "?")))
+    if status.get("last_high_grade_override"):
+        st.warning(
+            "High-grade spread override used. Signal score met the governed threshold and spread remained within both the hard and ATR-relative limits."
+        )
+    if status.get("last_rejection_reason"):
+        st.caption(
+            f"Last rejection: {status.get('last_rejection_category', 'unknown')} ? {status.get('last_rejection_reason')}"
+        )
+
     signal_tab, order_tab, deal_tab = st.tabs(["Signals", "MT5 orders", "MT5 deals"])
     with signal_tab:
         if signals.empty:
@@ -137,7 +162,7 @@ def runtime_panel() -> None:
         if orders.empty:
             st.info("No MT5 order attempts recorded yet.")
         else:
-            cols = [c for c in ["timestamp", "status", "order", "deal", "symbol", "side", "volume", "price", "sl", "tp", "projected_risk_cash", "retcode", "comment"] if c in orders]
+            cols = [c for c in ["timestamp", "status", "rejection_category", "rejection_reason", "spread_gate_mode", "high_grade_override", "signal_score", "spread_points", "normal_spread_limit_points", "effective_spread_limit_points", "spread_atr_fraction", "order", "deal", "symbol", "side", "volume", "price", "sl", "tp", "projected_risk_cash", "retcode", "comment"] if c in orders]
             st.dataframe(orders.tail(25).iloc[::-1][cols], use_container_width=True, hide_index=True)
     with deal_tab:
         if deals.empty:

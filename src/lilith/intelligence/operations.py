@@ -74,20 +74,26 @@ class InstitutionalReportStore:
             )
 
     def records(self, *, report_type: str | None = None, subject_id: str | None = None) -> list[dict[str, Any]]:
-        clauses: list[str] = []
-        parameters: list[str] = []
-        if report_type is not None:
-            clauses.append("report_type = ?")
-            parameters.append(report_type)
-        if subject_id is not None:
-            clauses.append("subject_id = ?")
-            parameters.append(subject_id)
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connect() as connection:
-            rows = connection.execute(
-                f"SELECT * FROM institutional_reports{where} ORDER BY generated_at_utc, report_id",
-                parameters,
-            ).fetchall()
+            if report_type is not None and subject_id is not None:
+                rows = connection.execute(
+                    "SELECT * FROM institutional_reports WHERE report_type = ? AND subject_id = ? ORDER BY generated_at_utc, report_id",
+                    (report_type, subject_id),
+                ).fetchall()
+            elif report_type is not None:
+                rows = connection.execute(
+                    "SELECT * FROM institutional_reports WHERE report_type = ? ORDER BY generated_at_utc, report_id",
+                    (report_type,),
+                ).fetchall()
+            elif subject_id is not None:
+                rows = connection.execute(
+                    "SELECT * FROM institutional_reports WHERE subject_id = ? ORDER BY generated_at_utc, report_id",
+                    (subject_id,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM institutional_reports ORDER BY generated_at_utc, report_id"
+                ).fetchall()
         return [
             {
                 "report_id": row["report_id"],

@@ -74,20 +74,26 @@ class ObservationStore:
         return count
 
     def records(self, *, instrument: str | None = None, timeframe: str | None = None) -> list[dict]:
-        where: list[str] = []
-        parameters: list[str] = []
-        if instrument is not None:
-            where.append("instrument = ?")
-            parameters.append(instrument)
-        if timeframe is not None:
-            where.append("timeframe = ?")
-            parameters.append(timeframe)
-        clause = f" WHERE {' AND '.join(where)}" if where else ""
         with self._connect() as connection:
-            rows = connection.execute(
-                f"SELECT payload_json FROM observations{clause} ORDER BY timestamp_utc, record_id",
-                parameters,
-            ).fetchall()
+            if instrument is not None and timeframe is not None:
+                rows = connection.execute(
+                    "SELECT payload_json FROM observations WHERE instrument = ? AND timeframe = ? ORDER BY timestamp_utc, record_id",
+                    (instrument, timeframe),
+                ).fetchall()
+            elif instrument is not None:
+                rows = connection.execute(
+                    "SELECT payload_json FROM observations WHERE instrument = ? ORDER BY timestamp_utc, record_id",
+                    (instrument,),
+                ).fetchall()
+            elif timeframe is not None:
+                rows = connection.execute(
+                    "SELECT payload_json FROM observations WHERE timeframe = ? ORDER BY timestamp_utc, record_id",
+                    (timeframe,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT payload_json FROM observations ORDER BY timestamp_utc, record_id"
+                ).fetchall()
         return [json.loads(row["payload_json"]) for row in rows]
 
     def count(self) -> int:
